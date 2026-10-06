@@ -17,6 +17,7 @@ import {
   Check, X, ChevronLeft, ChevronRight, Volume2, Square, Eye, EyeOff,
 } from 'lucide-react';
 import PageShell, { Chip } from '@/components/PageShell';
+import { art } from '@/lib/art';
 import PhaseGate from '@/components/PhaseGate';
 import { planReviewCompletion, runReviewFinish } from '@/lib/reviewCompletion';
 import { useNumeraStore } from '@/store/useNumeraStore';
@@ -596,15 +597,21 @@ export default function ReviewPage() {
       <PhaseGate phase="review">
         <PageShell title="Review & feedback" subtitle={subtitle}>
           <div className="rounded-lg border border-muted-gray bg-white px-6 py-6 flex flex-col gap-4">
-            <div>
-              <div className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue">
-                {loginReview.topicStatus === 'COMPLETED' ? 'Topic complete' : 'Your results'}
+            <div className="flex items-center gap-4">
+              {mastered && (
+                // eslint-disable-next-line @next/next/no-img-element -- static export
+                <img src={art('rewards/mastery')} alt="" aria-hidden="true" className="h-20 w-20 flex-shrink-0 object-contain" />
+              )}
+              <div>
+                <div className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue">
+                  {loginReview.topicStatus === 'COMPLETED' ? 'Topic complete' : 'Your results'}
+                </div>
+                <p className="mt-1 text-[15px] text-ink font-semibold">
+                  {mastered
+                    ? 'You mastered this topic.'
+                    : 'Here is how each part of the topic went.'}
+                </p>
               </div>
-              <p className="mt-1 text-[15px] text-ink font-semibold">
-                {mastered
-                  ? 'You mastered this topic.'
-                  : 'Here is how each part of the topic went.'}
-              </p>
             </div>
             <ul className="flex flex-col divide-y divide-muted-gray border-t border-muted-gray">
               {loginReview.skills.map((skill) => (

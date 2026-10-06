@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import PageShell, { Chip } from '@/components/PageShell';
+import { art } from '@/lib/art';
 
 interface Flagged {
   equation: string;
@@ -26,6 +27,7 @@ export default function FlaggedPage() {
 
   return (
     <PageShell
+      art={art('empty/flagged')}
       title="Flagged"
       subtitle="Problems you saved to come back to, grouped by module."
       action={<Chip tone="outline">{FLAGGED.length} saved</Chip>}

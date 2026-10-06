@@ -32,9 +32,13 @@
  *
  * The glyphs are the same lucide shapes the rail used, so nobody has to
  * relearn what anything is.
+ *
+ * Ten tiles are now 3D illustrations (ArtTile, 6 Oct). Key Notes and People
+ * keep their glyph tiles until their art is made.
  */
 
 import type { ReactElement, ReactNode } from 'react';
+import { art } from '@/lib/art';
 
 /**
  * A squircle, not a rounded rect. Straight edges through the middle of each
@@ -102,37 +106,54 @@ function Tile({
   );
 }
 
+/**
+ * A 3D illustrated icon (Midjourney, public/art/dock) on a white squircle.
+ *
+ * The art comes on white, so the tile is white and the picture needs no
+ * cut-out — a cut-out left a grey shadow halo on the dark dock. Clipped to the
+ * same squircle as Tile, so both kinds sit in one row.
+ */
+function ArtTile({ id, src }: { id: string; src: string }) {
+  return (
+    <svg
+      viewBox="0 0 64 64"
+      width="100%"
+      height="100%"
+      aria-hidden="true"
+      focusable="false"
+      style={{ display: 'block' }}
+    >
+      <defs>
+        <clipPath id={`${id}-clip`}>
+          <path d={SQUIRCLE} />
+        </clipPath>
+      </defs>
+      <path d={SQUIRCLE} fill="#FFFFFF" />
+      <image
+        href={src}
+        x="3"
+        y="3"
+        width="58"
+        height="58"
+        preserveAspectRatio="xMidYMid meet"
+        clipPath={`url(#${id}-clip)`}
+      />
+      <path d={SQUIRCLE} fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="1" />
+    </svg>
+  );
+}
+
 /* ── Lesson — the live learning moment ─────────────────────────── */
-export const LessonIcon: ReactElement = (
-  <Tile id="nd-lesson" from="#4169E1" to="#00B4D8">
-    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-    <path d="m15 5 4 4" />
-  </Tile>
-);
+export const LessonIcon: ReactElement = <ArtTile id="nd-lesson" src={art('dock/lesson')} />;
 
 /* ── Workbook — practice you accumulate, so it grows: green, and the
       first tile that used to end in near-black navy. ───────────────── */
-export const WorkbookIcon: ReactElement = (
-  <Tile id="nd-workbook" from="#3DD68C" to="#12855A">
-    <path d="M12 7v14" />
-    <path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z" />
-  </Tile>
-);
+export const WorkbookIcon: ReactElement = <ArtTile id="nd-workbook" src={art('dock/workbook')} />;
 
 /* ── Group Challenge — social. Purple is borrowed from .lg-ambient so
       it stays inside the existing visual world, and keeps Challenge from
       colliding with the amber/orange the app already uses for alerts. ── */
-export const ChallengeIcon: ReactElement = (
-  <Tile id="nd-challenge" from="#A77BFF" to="#6D3FD4">
-    <polyline points="14.5 17.5 3 6 3 3 6 3 17.5 14.5" />
-    <line x1="13" y1="19" x2="19" y2="13" />
-    <line x1="16" y1="16" x2="20" y2="20" />
-    <polyline points="14.5 6.5 18 3 21 3 21 6 17.5 9.5" />
-    <line x1="5" y1="14" x2="9" y2="18" />
-    <line x1="7" y1="17" x2="4" y2="20" />
-    <line x1="3" y1="19" x2="5" y2="21" />
-  </Tile>
-);
+export const ChallengeIcon: ReactElement = <ArtTile id="nd-challenge" src={art('dock/challenge')} />;
 
 /* ── Key Notes — "key formula / aha moment" is literally what
       highlight-amber is reserved for in the brand palette. ───────── */
@@ -154,56 +175,28 @@ export const PeopleIcon: ReactElement = (
 );
 
 /* ── Files — paper and folders: bronze, the material colour. ────── */
-export const FilesIcon: ReactElement = (
-  <Tile id="nd-files" from="#E8A765" to="#A05F22">
-    <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
-  </Tile>
-);
+export const FilesIcon: ReactElement = <ArtTile id="nd-files" src={art('dock/files')} />;
 
 /* ── Flagged — was orange, which collided with Key Notes two tiles
       away and read as another highlight. Crimson: this is the pile you
       got wrong, not the pile worth remembering. ─────────────────────── */
-export const FlaggedIcon: ReactElement = (
-  <Tile id="nd-flagged" from="#FF7A6B" to="#C81E14">
-    <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
-    <line x1="4" y1="22" x2="4" y2="15" />
-  </Tile>
-);
+export const FlaggedIcon: ReactElement = <ArtTile id="nd-flagged" src={art('dock/flagged')} />;
 
 /* ── Notifications — a signal has to cut through, and every other cool
       colour was taken by a destination. Lime is the loudest thing on the
       shelf and the only tile allowed to be. ─────────────────────────── */
-export const NotificationsIcon: ReactElement = (
-  <Tile id="nd-notifications" from="#B8E86A" to="#6E9C1C">
-    <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
-    <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-  </Tile>
-);
+export const NotificationsIcon: ReactElement = <ArtTile id="nd-notifications" src={art('dock/notifications')} />;
 
 /* ── History — indigo. It was the deepest blue in the set, which on a
       dark shelf meant it was barely a tile at all. ──────────────────── */
-export const HistoryIcon: ReactElement = (
-  <Tile id="nd-history" from="#8B93E8" to="#3A44A0">
-    <circle cx="12" cy="12" r="10" />
-    <polyline points="12 6 12 12 16 14" />
-  </Tile>
-);
+export const HistoryIcon: ReactElement = <ArtTile id="nd-history" src={art('dock/history')} />;
 
 /* ── Help & support — AI guidance ──────────────────────────────── */
-export const HelpIcon: ReactElement = (
-  <Tile id="nd-help" from="#35D6C0" to="#0A7F72">
-    <path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3" />
-  </Tile>
-);
+export const HelpIcon: ReactElement = <ArtTile id="nd-help" src={art('dock/help')} />;
 
 /* ── Profile — the student themselves, so it takes the brand's own
       identity colour rather than a section colour. ── */
-export const ProfileIcon: ReactElement = (
-  <Tile id="nd-profile" from="#7B97D4" to="#3A5490">
-    <circle cx="12" cy="8" r="4" />
-    <path d="M4 21v-1a8 8 0 0 1 16 0v1" />
-  </Tile>
-);
+export const ProfileIcon: ReactElement = <ArtTile id="nd-profile" src={art('dock/profile')} />;
 
 /* ── Log out — the way out, asked for in the dock itself (Manjusha, 7 Aug).
       It also lives in Profile, which is where this used to be the ONLY way
@@ -215,10 +208,4 @@ export const ProfileIcon: ReactElement = (
       another place to visit. It is also absent from the lesson, where the
       dock is tucked away — which is exactly where a mis-tap would cost the
       most work. ── */
-export const LogOutIcon: ReactElement = (
-  <Tile id="nd-logout" from="#9AA3B0" to="#5A6472">
-    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-    <polyline points="16 17 21 12 16 7" />
-    <line x1="21" y1="12" x2="9" y2="12" />
-  </Tile>
-);
+export const LogOutIcon: ReactElement = <ArtTile id="nd-logout" src={art('dock/logout')} />;

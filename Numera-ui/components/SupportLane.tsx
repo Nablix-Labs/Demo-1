@@ -52,6 +52,7 @@ import { cn } from '@/lib/cn';
 import WriteNote from '@/components/WriteNote';
 import SupportDeck from '@/components/SupportDeck';
 import ResizeHandle from '@/components/MediaPanel/ResizeHandle';
+import { art } from '@/lib/art';
 
 export default function SupportLane() {
   const panelSide = useNumeraStore((s) => s.panelSide);
@@ -133,9 +134,13 @@ export default function SupportLane() {
         {/* Said plainly rather than left blank. A student who has asked for
             nothing should read this column as "ready", not as broken. */}
         {empty && (
-          <p className="text-[12px] leading-relaxed text-slate-blue/70">
-            Hints and cues from Numera will appear here.
-          </p>
+          <div className="flex flex-col items-center gap-3 pt-6 text-center">
+            {/* eslint-disable-next-line @next/next/no-img-element -- static export */}
+            <img src={art('empty/hints')} alt="" aria-hidden="true" className="h-20 w-20 object-contain opacity-90" />
+            <p className="text-[12px] leading-relaxed text-slate-blue/70">
+              Hints and cues from Numera will appear here.
+            </p>
+          </div>
         )}
       </div>
     </aside>

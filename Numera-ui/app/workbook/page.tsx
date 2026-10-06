@@ -21,11 +21,13 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
-import { ClipboardCheck, Folder, X } from 'lucide-react';
+import { ClipboardCheck, X } from 'lucide-react';
 import { ProgressBar, EmptyState } from '@/components/PageShell';
 import PhaseGate from '@/components/PhaseGate';
 import { Book } from '@/components/ui/book';
 import { topicLook } from '@/components/workbook/topicLook';
+import { HeaderArt } from '@/components/PageShell';
+import { art, topicArt, ART_PAPER } from '@/lib/art';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import {
   CURRICULUM, KEY_STAGES, subtopicsForStage, topicProgressForStage,
@@ -56,13 +58,16 @@ export default function WorkbookPage() {
       <main className="flex-1 min-w-0 overflow-y-auto bg-white" aria-label="Workbook">
         <div className="mx-auto w-full max-w-[1180px] px-10 py-10">
           <header className="mb-8 flex items-end justify-between gap-4">
-            <div>
-              <h1 className="text-[30px] font-semibold leading-[1.15] tracking-[-0.02em] text-ink">
-                Workbook
-              </h1>
-              <p className="mt-1.5 text-[14px] text-slate-blue">
-                Your topics and subtopics — matched to your school year.
-              </p>
+            <div className="flex items-center gap-5">
+              <HeaderArt src={art('empty/workbook')} />
+              <div>
+                <h1 className="text-[30px] font-semibold leading-[1.15] tracking-[-0.02em] text-ink">
+                  Workbook
+                </h1>
+                <p className="mt-1.5 text-[14px] text-slate-blue">
+                  Your topics and subtopics — matched to your school year.
+                </p>
+              </div>
             </div>
             <Link
               href="/diagnostic"
@@ -100,7 +105,7 @@ export default function WorkbookPage() {
 
           {topics.length === 0 ? (
             <EmptyState
-              icon={<Folder size={20} strokeWidth={1.6} />}
+              art={art('empty/workbook')}
               title={`No topics for ${stage.label} yet`}
               body="We haven't added content for your school year here yet. Try another age, or retake the diagnostic to re-check your level."
               action={
@@ -119,6 +124,7 @@ export default function WorkbookPage() {
                 const pct = topicProgressForStage(t, ks, completed);
                 const look = topicLook(t.id);
                 const Icon = look.Icon;
+                const cover = topicArt(t.id);
 
                 return (
                   <button
@@ -131,11 +137,16 @@ export default function WorkbookPage() {
                       variant="stripe"
                       title={t.title}
                       width={236}
-                      color={look.color}
+                      color={cover ? ART_PAPER : look.color}
                       textColor="#2B2D42"
                       textured
                       illustration={
-                        <Icon size={62} strokeWidth={1.25} style={{ color: '#FFFFFF', opacity: 0.9 }} />
+                        cover ? (
+                          // eslint-disable-next-line @next/next/no-img-element -- static export
+                          <img src={cover} alt="" className="h-[86%] w-[86%] object-contain" />
+                        ) : (
+                          <Icon size={62} strokeWidth={1.25} style={{ color: '#FFFFFF', opacity: 0.9 }} />
+                        )
                       }
                     />
 

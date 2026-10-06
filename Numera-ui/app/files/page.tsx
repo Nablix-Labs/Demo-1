@@ -21,6 +21,8 @@ import dynamic from 'next/dynamic';
 import { FileText, Image as ImageIcon, NotebookPen } from 'lucide-react';
 import { FILES, KIND, type FileItem } from '@/lib/files';
 import { Book } from '@/components/ui/book';
+import { HeaderArt } from '@/components/PageShell';
+import { art } from '@/lib/art';
 
 /** StPageFlip touches the DOM on mount, so the reader is browser-only. */
 const FileBook = dynamic(() => import('@/components/files/FileBook'), { ssr: false });
@@ -37,13 +39,16 @@ export default function FilesPage() {
   return (
     <main className="flex-1 min-w-0 overflow-y-auto bg-white" aria-label="Files">
       <div className="mx-auto w-full max-w-[1180px] px-10 py-10">
-        <header className="mb-10">
-          <h1 className="text-[30px] font-semibold leading-[1.15] tracking-[-0.02em] text-ink">
-            Files
-          </h1>
-          <p className="mt-1.5 text-[14px] text-slate-blue">
-            Worksheets, saved canvas working and notes from your sessions.
-          </p>
+        <header className="mb-10 flex items-center gap-5">
+          <HeaderArt src={art('empty/files')} />
+          <div>
+            <h1 className="text-[30px] font-semibold leading-[1.15] tracking-[-0.02em] text-ink">
+              Files
+            </h1>
+            <p className="mt-1.5 text-[14px] text-slate-blue">
+              Worksheets, saved canvas working and notes from your sessions.
+            </p>
+          </div>
         </header>
 
         <div className="flex flex-wrap gap-x-10 gap-y-12">

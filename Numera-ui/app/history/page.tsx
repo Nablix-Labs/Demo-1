@@ -19,6 +19,7 @@
 import Link from 'next/link';
 import PageShell, { ProgressBar, Chip } from '@/components/PageShell';
 import SessionTrail from '@/components/SessionTrail';
+import { art } from '@/lib/art';
 
 interface Session {
   date: string;
@@ -53,7 +54,7 @@ export default function HistoryPage() {
   const mins = totalMin % 60;
 
   return (
-    <PageShell title="History" subtitle="A record of your past tutoring sessions.">
+    <PageShell art={art('empty/history')} title="History" subtitle="A record of your past tutoring sessions.">
       {/* What the record adds up to — the question a student opens this with. */}
       <div className="mb-5 flex items-center justify-between gap-4 rounded-lg border border-muted-gray bg-reading-surface px-5 py-3.5">
         {[

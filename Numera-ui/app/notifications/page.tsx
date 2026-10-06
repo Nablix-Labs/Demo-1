@@ -1,6 +1,7 @@
 import PageShell, { IconBadge } from '@/components/PageShell';
 import { CalendarClock, MessageSquare, Trophy, FileCheck2 } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { art } from '@/lib/art';
 
 interface Note {
   icon: typeof CalendarClock;
@@ -21,6 +22,7 @@ export default function NotificationsPage() {
   const unread = NOTES.filter((n) => n.unread).length;
   return (
     <PageShell
+      art={art('empty/notifications')}
       title="Notifications"
       subtitle={unread > 0 ? `${unread} unread` : 'You’re all caught up.'}
     >

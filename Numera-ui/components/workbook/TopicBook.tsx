@@ -23,6 +23,7 @@ import Link from 'next/link';
 import HTMLFlipBook from 'react-pageflip';
 import { Check } from 'lucide-react';
 import { topicLook } from './topicLook';
+import { topicArt, subtopicArt, ART_PAPER } from '@/lib/art';
 import { effectiveStatus, type Subtopic, type Topic, type LessonStatus } from '@/lib/curriculum';
 
 const W = 430;
@@ -162,6 +163,7 @@ function Cover({
   keyStage: string;
   progress: number;
 }) {
+  const cover = topicArt(topic.id);
   return (
     <div
       className="relative flex h-full flex-col overflow-hidden rounded-r-md"
@@ -169,9 +171,14 @@ function Cover({
     >
       <div
         className="relative flex flex-1 items-center justify-center"
-        style={{ background: color }}
+        style={{ background: cover ? ART_PAPER : color }}
       >
-        <Icon size={78} strokeWidth={1.2} style={{ color: '#FFFFFF', opacity: 0.9 }} />
+        {cover ? (
+          // eslint-disable-next-line @next/next/no-img-element -- static export
+          <img src={cover} alt="" className="h-[84%] w-[84%] object-contain" />
+        ) : (
+          <Icon size={78} strokeWidth={1.2} style={{ color: '#FFFFFF', opacity: 0.9 }} />
+        )}
         <div
           aria-hidden="true"
           className="absolute inset-y-0 left-0 w-[8.2%] mix-blend-overlay"
@@ -305,17 +312,27 @@ function SubtopicSheet({
       ? `/topic-diagnostic/?topic=${encodeURIComponent(topicId)}&lesson=${encodeURIComponent(lessonId)}`
       : '/';
 
+  const spot = subtopicArt(sub.id);
+
   return (
     <div
       className="relative flex h-full flex-col bg-[#FDFBF7] px-9 pb-8 pt-9"
       style={{ width: W, height: H }}
     >
-      <p className="text-[10px] font-semibold uppercase tracking-[1.2px] text-slate-blue">
-        {sub.keyStage}
-      </p>
-      <h2 className="mt-1 text-[19px] font-semibold leading-tight tracking-[-0.01em] text-ink">
-        {sub.title}
-      </h2>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[1.2px] text-slate-blue">
+            {sub.keyStage}
+          </p>
+          <h2 className="mt-1 text-[19px] font-semibold leading-tight tracking-[-0.01em] text-ink">
+            {sub.title}
+          </h2>
+        </div>
+        {spot && (
+          // eslint-disable-next-line @next/next/no-img-element -- static export
+          <img src={spot} alt="" aria-hidden="true" className="-mt-2 h-16 w-16 flex-shrink-0 object-contain" />
+        )}
+      </div>
       <div className="mt-4 mb-1 h-px bg-[#1B2A4A]/12" />
 
       <ul className="flex flex-col">

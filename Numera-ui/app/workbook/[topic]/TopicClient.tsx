@@ -15,7 +15,8 @@
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { notFound } from 'next/navigation';
-import { ChevronLeft, BookOpen } from 'lucide-react';
+import { ChevronLeft } from 'lucide-react';
+import { art } from '@/lib/art';
 import { EmptyState } from '@/components/PageShell';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import {
@@ -59,7 +60,7 @@ export default function TopicClient({ topicId }: { topicId: string }) {
 
         {subtopics.length === 0 ? (
           <EmptyState
-            icon={<BookOpen size={20} strokeWidth={1.6} />}
+            art={art('empty/workbook')}
             title="Nothing at your level here yet"
             body={`${topic.title} has no subtopics for your school year right now. Pick another topic from your workbook.`}
             action={

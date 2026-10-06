@@ -29,12 +29,15 @@ export default function PageShell({
   title,
   subtitle,
   action,
+  art,
   wide = false,
   children,
 }: {
   title: string;
   subtitle?: string;
   action?: ReactNode;
+  /** Header illustration, a /public URL (see lib/art). Sits beside the title. */
+  art?: string;
   /** Use the wide measure and tighter gutters. For card grids, not prose. */
   wide?: boolean;
   children: ReactNode;
@@ -65,11 +68,14 @@ export default function PageShell({
           whole page hung off the top-left corner of a wide screen. */}
       <header className={cn('border-b border-white/40 py-8 flex-shrink-0', gutter)}>
         <div className={cn(measure, 'flex items-end justify-between gap-4')}>
-          <div>
-            <h1 className="text-[30px] font-semibold text-ink leading-[1.15] tracking-[-0.02em]">
-              {title}
-            </h1>
-            {subtitle && <p className="text-[14px] text-slate-blue mt-1.5">{subtitle}</p>}
+          <div className="flex items-center gap-5">
+            {art && <HeaderArt src={art} />}
+            <div>
+              <h1 className="text-[30px] font-semibold text-ink leading-[1.15] tracking-[-0.02em]">
+                {title}
+              </h1>
+              {subtitle && <p className="text-[14px] text-slate-blue mt-1.5">{subtitle}</p>}
+            </div>
           </div>
           {action}
         </div>
@@ -83,6 +89,14 @@ export default function PageShell({
         <div className={measure}>{children}</div>
       </div>
     </main>
+  );
+}
+
+/** The illustration beside a page title. Decorative, so hidden from readers. */
+export function HeaderArt({ src }: { src: string }) {
+  return (
+    // eslint-disable-next-line @next/next/no-img-element -- static export, no optimizer
+    <img src={src} alt="" aria-hidden="true" className="h-[72px] w-[72px] flex-shrink-0 object-contain" />
   );
 }
 
@@ -126,18 +140,24 @@ export function Skeleton({ className }: { className?: string }) {
 /** Centered empty/placeholder panel for "nothing here yet" states. */
 export function EmptyState({
   icon,
+  art,
   title,
   body,
   action,
 }: {
   icon?: ReactNode;
+  /** Illustration URL (lib/art); shown instead of the icon tile. */
+  art?: string;
   title: string;
   body?: string;
   action?: ReactNode;
 }) {
   return (
     <div className="flex flex-col items-center justify-center text-center rounded-lg border border-dashed border-muted-gray bg-reading-surface px-8 py-14">
-      {icon && (
+      {art ? (
+        // eslint-disable-next-line @next/next/no-img-element -- static export, no optimizer
+        <img src={art} alt="" aria-hidden="true" className="mb-4 h-28 w-28 object-contain" />
+      ) : icon && (
         <span className="w-11 h-11 rounded-xl border border-muted-gray bg-white text-slate-blue flex items-center justify-center mb-3">
           {icon}
         </span>
