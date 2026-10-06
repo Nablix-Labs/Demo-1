@@ -1,4 +1,7 @@
+import Link from 'next/link';
 import { Topbar } from './Topbar';
+import { HealthBadge } from './HealthBadge';
+import type { ContentHealth } from '@/lib/api/v3-contracts';
 
 /** Full-page shell for the cross-topic library screens: topbar + editorial
  *  masthead + scrolling body, matching the Dashboard's rhythm. */
@@ -35,11 +38,38 @@ export function LibraryPage({
   );
 }
 
-/** Topic tag chip used across library tables. */
-export function TopicTag({ code }: { code: string }) {
-  return (
-    <span className="rounded bg-reading-surface px-1.5 py-0.5 font-mono text-2xs font-bold text-learning-blue ring-1 ring-inset ring-muted-gray/70">
+/** Topic tag chip used across library tables. With `href` it links to that
+ *  topic's workspace page; `title` shows the topic name on hover. */
+export function TopicTag({ code, href, title }: { code: string; href?: string; title?: string }) {
+  const chip = (
+    <span
+      title={title}
+      className="rounded bg-reading-surface px-1.5 py-0.5 font-mono text-2xs font-bold text-learning-blue ring-1 ring-inset ring-muted-gray/70"
+    >
       {code}
     </span>
   );
+  return href ? <Link href={href} className="hover:opacity-80">{chip}</Link> : chip;
+}
+
+/** The load failed outright, or some topics' pages did — said plainly, never hidden. */
+export function LibraryNotice({ error, failed }: { error?: string | null; failed?: string[] }) {
+  if (error) {
+    return <p className="mb-3 text-sm font-semibold text-danger">Could not load this library: {error}</p>;
+  }
+  if (!failed?.length) return null;
+  return (
+    <p className="mb-3 text-sm font-semibold text-action-orange">
+      Could not load {failed.length === 1 ? 'topic' : 'topics'} {failed.join(', ')} — showing the rest.
+    </p>
+  );
+}
+
+const HEALTH_STATES = ['COMPLETE', 'WARNING', 'MISSING'];
+
+/** HealthBadge for a library row; renders nothing when the row sent no
+ *  recognisable health, rather than crashing the whole list. */
+export function RowHealth({ health, showLabel }: { health?: ContentHealth | null; showLabel?: boolean }) {
+  if (!health || !HEALTH_STATES.includes(health.state)) return null;
+  return <HealthBadge health={health} showLabel={showLabel} />;
 }

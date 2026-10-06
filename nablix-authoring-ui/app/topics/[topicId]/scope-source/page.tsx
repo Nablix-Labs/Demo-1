@@ -6,7 +6,7 @@ import { useTopicId } from '@/lib/useTopicId';
  * the source group carries provenance fields rather than scope text (guide §6.2).
  */
 import { useEffect, useState } from 'react';
-import { ListFilter, Plus } from 'lucide-react';
+import { ListFilter } from 'lucide-react';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading, Meta } from '@/components/nablix/SectionHeader';
 import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
@@ -40,11 +40,6 @@ export default function ScopeSourcePage() {
         icon={<ListFilter className="h-3.5 w-3.5" />}
         title="Scope & Source"
         description="What this topic covers, what it deliberately does not, and where the content came from."
-        action={
-          <button className="btn btn-primary">
-            <Plus className="h-4 w-4" /> Add Scope Item
-          </button>
-        }
       />
 
       <HealthIssues health={data.content_health} />
@@ -75,9 +70,6 @@ export default function ScopeSourcePage() {
         {!group || group.items.length === 0 ? (
           <div className="px-5 py-8 text-center">
             <p className="text-sm font-semibold text-action-orange">Nothing recorded in this group.</p>
-            <button className="btn btn-secondary mt-3">
-              <Plus className="h-4 w-4" /> Add
-            </button>
           </div>
         ) : (
           <ul>

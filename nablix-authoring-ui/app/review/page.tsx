@@ -2,12 +2,12 @@
 
 /**
  * Review Queue — v3 page 02. Blocking validation is visible before the reviewer
- * enters the topic, and approval is not offered from here when the topic has
- * blocking issues (guide §5.2).
+ * enters the topic (guide §5.2). Approve / return live on the topic's publish
+ * page, which also enforces the blocking rule, so each item links there.
  */
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Check, Undo2, Eye, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { ArrowRight, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { LibraryPage, TopicTag } from '@/components/nablix/LibraryPage';
 import { StatusPill } from '@/components/nablix/StatusPill';
 import { apiV3 } from '@/lib/api/v3Adapter';
@@ -24,7 +24,7 @@ export default function ReviewPage() {
       crumb="Review"
       eyebrow="Workflow · Review Queue"
       title="Review Queue"
-      description="Topics submitted for review. Approve when clean, or return with changes."
+      description="Topics submitted for review. Open one to approve it when clean, or return it with changes."
     >
       <div className="grid gap-3">
         {rows === null ? (
@@ -50,7 +50,10 @@ export default function ReviewPage() {
                       </Link>
                       <StatusPill status={r.workflow_status} />
                     </div>
-                    <div className="mt-1 text-2xs text-slate-blue">{r.ks_stage}</div>
+                    <div className="mt-1 text-2xs text-slate-blue">
+                      {r.ks_stage}
+                      {r.default_action && <> · Suggested action: {r.default_action.replace(/_/g, ' ').toLowerCase()}</>}
+                    </div>
                     <div className="mt-2 flex items-center gap-3 text-2xs font-semibold">
                       {blocked ? (
                         <span className="text-danger">{r.validation.blocking_count} blocking</span>
@@ -66,17 +69,9 @@ export default function ReviewPage() {
                       )}
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Link href={`/topics/${r.topic_id}/publish`} className="btn btn-secondary">
-                      <Eye className="h-4 w-4" /> Review
-                    </Link>
-                    <button className="btn btn-secondary">
-                      <Undo2 className="h-4 w-4" /> Return
-                    </button>
-                    <button className="btn btn-primary" disabled={blocked}>
-                      <Check className="h-4 w-4" /> Approve
-                    </button>
-                  </div>
+                  <Link href={`/topics/${r.topic_id}/publish`} className="btn btn-primary">
+                    Review &amp; decide <ArrowRight className="h-4 w-4" />
+                  </Link>
                 </div>
               </section>
             );

@@ -7,7 +7,7 @@ import { useTopicId } from '@/lib/useTopicId';
  * merged by matching title text (guide §7.2). Steps render in step_no order.
  */
 import { useEffect, useState } from 'react';
-import { FlaskConical, Plus, ListOrdered, Target } from 'lucide-react';
+import { FlaskConical, ListOrdered, Target } from 'lucide-react';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading, Meta, WeightChip } from '@/components/nablix/SectionHeader';
 import { StatusPill } from '@/components/nablix/StatusPill';
@@ -43,11 +43,6 @@ export default function WorkedExamplesPage() {
         icon={<FlaskConical className="h-3.5 w-3.5" />}
         title="Worked Examples"
         description="Modelled solutions the tutor walks through, step by step."
-        action={
-          <button className="btn btn-primary">
-            <Plus className="h-4 w-4" /> Add Worked Example
-          </button>
-        }
       />
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">

@@ -1,10 +1,9 @@
 'use client';
 
 /**
- * Topic Details — v3 page 03. The topic record itself; PUT touches only this
- * record, never the child collections (guide §6.1).
+ * Topic Details — v3 page 03. The topic record itself, read-only (guide §6.1).
  */
-import { FileText, Pencil } from 'lucide-react';
+import { FileText } from 'lucide-react';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading, Meta } from '@/components/nablix/SectionHeader';
 import { StatusPill } from '@/components/nablix/StatusPill';
@@ -24,12 +23,7 @@ export default function TopicDetailsPage() {
         eyebrow="Topic"
         icon={<FileText className="h-3.5 w-3.5" />}
         title={t.topic_title}
-        description="The topic record. Editing these fields updates the topic only."
-        action={
-          <button className="btn btn-secondary">
-            <Pencil className="h-4 w-4" /> Edit Topic
-          </button>
-        }
+        description="The topic record."
       />
 
       <HealthIssues health={ws.content_health} />

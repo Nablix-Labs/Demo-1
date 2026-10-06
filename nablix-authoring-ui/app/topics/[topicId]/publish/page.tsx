@@ -7,6 +7,7 @@ import { useTopicId } from '@/lib/useTopicId';
  * they are not hard-coded here (guide §10.3).
  */
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { Send, Eye, ShieldCheck, CircleAlert, ArrowRight, Lock } from 'lucide-react';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading } from '@/components/nablix/SectionHeader';
@@ -28,10 +29,10 @@ function actionLabel(action: string) {
  * Which action ids this screen can actually carry out.
  *
  * Only two of the contract's actions have endpoints behind them
- * (`POST .../approve`, `POST .../return`, shipped 2 Sep 2026). VALIDATE,
- * PREVIEW and PUBLISH are still offered by `available_actions` and stay inert
- * here — a button that looks live and silently does nothing is worse than one
- * that is plainly not wired yet, so those render disabled with a reason.
+ * (`POST .../approve`, `POST .../return`, shipped 2 Sep 2026). VALIDATE has no
+ * endpoint but the coverage page already shows the validation result, so it
+ * links there. PREVIEW, PUBLISH and anything else unknown have nothing behind
+ * them and are not rendered at all.
  *
  * RETURN is matched under both names on purpose: the v3 sample calls it
  * `REQUEST_CHANGES` while the endpoint is `/return`, and the deployed
@@ -41,9 +42,10 @@ function actionLabel(action: string) {
 const APPROVE_IDS = ['APPROVE'];
 const RETURN_IDS = ['REQUEST_CHANGES', 'RETURN'];
 
-function actionKind(action: string): 'approve' | 'return' | 'unwired' {
+function actionKind(action: string): 'approve' | 'return' | 'validate' | 'unwired' {
   if (APPROVE_IDS.includes(action)) return 'approve';
   if (RETURN_IDS.includes(action)) return 'return';
+  if (action === 'VALIDATE') return 'validate';
   return 'unwired';
 }
 
@@ -92,7 +94,8 @@ export default function PublishPage() {
   if (!data) return <SectionLoading />;
 
   const { workflow, learner_flow_sections } = data;
-  const primary = workflow.available_actions.find((a) => /PUBLISH|APPROVE|SUBMIT/.test(a));
+  const actions = workflow.available_actions.filter((a) => actionKind(a) !== 'unwired');
+  const primary = actions.find((a) => /PUBLISH|APPROVE|SUBMIT/.test(a));
   // A return needs a reason; the server enforces it (`ReturnIn.minLength: 1`)
   // and so does this, so the approver learns before the request, not after.
   const canSubmit = commenting === 'approve' || comment.trim().length > 0;
@@ -103,12 +106,7 @@ export default function PublishPage() {
         eyebrow="Topic · Preview & Publish"
         icon={<Send className="h-3.5 w-3.5" />}
         title="Preview & Publish"
-        description="Preview the topic in learner-flow order, then act. Available actions come from the topic's workflow state."
-        action={
-          <button className="btn btn-secondary">
-            <Eye className="h-4 w-4" /> Open Preview
-          </button>
-        }
+        description="The topic in learner-flow order, then the review actions its workflow state allows."
       />
 
       <section className="sheet overflow-hidden">
@@ -152,25 +150,32 @@ export default function PublishPage() {
           )}
 
           <div className="flex flex-wrap gap-2 border-t border-muted-gray/50 pt-3">
-            {workflow.available_actions.length === 0 ? (
+            {actions.length === 0 ? (
               <span className="flex items-center gap-1.5 text-xs text-slate-blue">
                 <Lock className="h-3.5 w-3.5" /> No actions available in this state.
               </span>
             ) : (
-              workflow.available_actions.map((a) => {
+              actions.map((a) => {
                 const kind = actionKind(a);
+                if (kind === 'validate') {
+                  return (
+                    <Link key={a} href={`/topics/${topicId}/coverage`} className="btn btn-secondary">
+                      {actionLabel(a)}
+                    </Link>
+                  );
+                }
+                if (kind === 'unwired') return null;
                 return (
                   <button
                     key={a}
-                    onClick={kind === 'unwired' ? undefined : () => openPanel(kind)}
+                    onClick={() => openPanel(kind)}
                     // `publish_allowed` deliberately does NOT gate these. It
                     // used to disable whichever action was `primary`, which
                     // made Approve unpressable in IN_REVIEW — the one state
                     // where approving is the whole point, and the state that
                     // produces APPROVED and therefore publish_allowed. It gates
-                    // PUBLISH, which has no endpoint and is disabled anyway.
-                    disabled={kind === 'unwired' || submitting}
-                    title={kind === 'unwired' ? 'No endpoint for this action yet.' : undefined}
+                    // PUBLISH, which has no endpoint and is not rendered.
+                    disabled={submitting}
                     className={cn('btn', a === primary ? 'btn-primary' : 'btn-secondary')}
                   >
                     {actionLabel(a)}

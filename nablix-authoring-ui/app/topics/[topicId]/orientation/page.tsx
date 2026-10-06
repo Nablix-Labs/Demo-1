@@ -7,7 +7,7 @@ import { useTopicId } from '@/lib/useTopicId';
  * Scenes render in scene_no order exactly as sent.
  */
 import { useEffect, useState } from 'react';
-import { PlayCircle, Plus, LayoutGrid, Clock } from 'lucide-react';
+import { PlayCircle, LayoutGrid, Clock } from 'lucide-react';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading, Meta } from '@/components/nablix/SectionHeader';
 import { StatusPill } from '@/components/nablix/StatusPill';
@@ -54,11 +54,6 @@ export default function OrientationPage() {
         icon={<PlayCircle className="h-3.5 w-3.5" />}
         title="Orientation"
         description="The orientation video's scenes and the support cards that sit beside it."
-        action={
-          <button className="btn btn-primary">
-            <Plus className="h-4 w-4" /> Add {branch === 'SCENES' ? 'Scene' : 'Support Card'}
-          </button>
-        }
       />
 
       <HealthIssues health={video.content_health} />

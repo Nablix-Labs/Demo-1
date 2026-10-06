@@ -4,7 +4,6 @@ import { useState } from 'react';
 import Link from 'next/link';
 import {
   ChevronRight,
-  Plus,
   FileText,
   Target,
   PlayCircle,
@@ -65,7 +64,7 @@ function Row({
       className={cn(
         // Each row is its own bordered box (Manav, 6 Oct), so the sections
         // read as separate items rather than a run of text.
-        'group/row flex items-center gap-1.5 border py-2 pr-2 text-[13px] transition-colors',
+        'flex items-center gap-1.5 border py-2 pr-2 text-[13px] transition-colors',
         active
           ? 'border-learning-blue/50 bg-learning-blue/10 font-semibold text-learning-blue'
           : 'border-muted-gray/80 bg-white/70 text-ink/80 hover:border-slate-blue/40 hover:bg-white',
@@ -98,15 +97,7 @@ function Row({
         </span>
       )}
 
-      {node.addable && (
-        <button
-          className="lg-chip flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-learning-blue opacity-0 transition-opacity group-hover/row:opacity-100"
-          title={`Add to ${node.label}`}
-          onClick={(e) => e.preventDefault()}
-        >
-          <Plus className="h-3.5 w-3.5" strokeWidth={2.5} />
-        </button>
-      )}
+      {/* node.addable is ignored: there is no create endpoint behind it. */}
     </div>
   );
 

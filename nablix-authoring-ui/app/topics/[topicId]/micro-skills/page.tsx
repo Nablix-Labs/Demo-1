@@ -7,7 +7,7 @@ import { useTopicId } from '@/lib/useTopicId';
  * skill's own content (guide §6.3).
  */
 import { useEffect, useState } from 'react';
-import { Target, Plus, HelpCircle, Link2 } from 'lucide-react';
+import { Target, HelpCircle, Link2 } from 'lucide-react';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading, Meta } from '@/components/nablix/SectionHeader';
 import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
@@ -43,11 +43,6 @@ export default function MicroSkillsPage() {
         icon={<Target className="h-3.5 w-3.5" />}
         title="Micro-skills"
         description="Every assessable skill in this topic, with the content that covers it."
-        action={
-          <button className="btn btn-primary">
-            <Plus className="h-4 w-4" /> Add Micro-skill
-          </button>
-        }
       />
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
@@ -83,6 +78,14 @@ export default function MicroSkillsPage() {
 
         <div className="min-w-0 space-y-4">
           {node && <HealthIssues health={node.content_health} />}
+
+          {/* The API sends the full record for its default selection only and
+              takes no selection parameter, so other rows show list data. */}
+          {node && !detail && (
+            <p className="sheet px-5 py-4 text-sm text-slate-blue">
+              The API only returns skill details and linked content for the topic&apos;s default selection.
+            </p>
+          )}
 
           {node && (
             <section className="sheet overflow-hidden">

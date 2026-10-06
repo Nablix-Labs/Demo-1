@@ -11,7 +11,7 @@ import { useTopicId } from '@/lib/useTopicId';
  * opening selection comes from default_selection.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { Lightbulb, Plus, Image as ImageIcon, Link2, Users } from 'lucide-react';
+import { Lightbulb, Image as ImageIcon, Link2, Users } from 'lucide-react';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading, Toggle, Meta } from '@/components/nablix/SectionHeader';
 import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
@@ -96,11 +96,6 @@ export default function HintsCuesPage() {
         icon={<Lightbulb className="h-3.5 w-3.5" />}
         title="Hints & Visual Cues"
         description="Support content lives under the misconception it repairs. Select a misconception to see only its support."
-        action={
-          <button className="btn btn-primary">
-            <Plus className="h-4 w-4" /> Add {tab === 'HINTS' ? 'Hint' : 'Visual Cue'}
-          </button>
-        }
       />
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
@@ -161,9 +156,6 @@ export default function HintsCuesPage() {
                 <p className="text-sm font-semibold text-action-orange">
                   No {tab === 'HINTS' ? 'hints have' : 'visual cues have'} been created for this misconception.
                 </p>
-                <button className="btn btn-secondary mt-3">
-                  <Plus className="h-4 w-4" /> Add {tab === 'HINTS' ? 'Hint' : 'Visual Cue'}
-                </button>
               </div>
             ) : (
               <ol>
@@ -217,8 +209,8 @@ export default function HintsCuesPage() {
                   <div className="flex items-start gap-2 rounded-lg bg-learning-blue/10 px-3 py-2 text-xs text-learning-blue">
                     <Users className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     <span>
-                      Used by {selectedChild.shared_by_misconception_count} misconceptions — editing this
-                      changes the support shown for all of them.
+                      Used by {selectedChild.shared_by_misconception_count} misconceptions — the same
+                      support is shown for all of them.
                     </span>
                   </div>
                 )}

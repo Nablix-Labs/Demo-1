@@ -1,19 +1,4 @@
-import { ChevronUp, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-/** Up/down reorder control for ordered lists (scenes, steps, stages). */
-export function MoveControls({ onUp, onDown, canUp, canDown }: { onUp: () => void; onDown: () => void; canUp: boolean; canDown: boolean }) {
-  return (
-    <div className="flex flex-col">
-      <button onClick={onUp} disabled={!canUp} className="flex h-4 w-5 items-center justify-center rounded text-slate-blue/70 hover:bg-reading-surface hover:text-ink disabled:opacity-30" aria-label="Move up">
-        <ChevronUp className="h-3.5 w-3.5" />
-      </button>
-      <button onClick={onDown} disabled={!canDown} className="flex h-4 w-5 items-center justify-center rounded text-slate-blue/70 hover:bg-reading-surface hover:text-ink disabled:opacity-30" aria-label="Move down">
-        <ChevronDown className="h-3.5 w-3.5" />
-      </button>
-    </div>
-  );
-}
 
 /** Consistent editor-section masthead: eyebrow · display title · description · action. */
 export function SectionHeader({

@@ -2,8 +2,9 @@
 
 import { useTopicId } from '@/lib/useTopicId';
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Save, ShieldCheck, Eye, Send, MoreHorizontal } from 'lucide-react';
+import { ShieldCheck } from 'lucide-react';
 import { Topbar } from '@/components/nablix/Topbar';
 import { Tree } from '@/components/nablix/Tree';
 import { ValidationPanel } from '@/components/nablix/ValidationPanel';
@@ -56,22 +57,13 @@ export function TopicWorkspaceShell({ children }: { children: React.ReactNode })
           )}
         </div>
 
+        {/* The portal is read-only apart from approve/return on the publish
+            page, so the bar only navigates. Preview & Publish is already a
+            tree entry; Validate opens the coverage page's validation result. */}
         <div className="ml-auto flex items-center gap-2">
-          <button className="btn btn-secondary">
-            <Save className="h-4 w-4" /> Save Draft
-          </button>
-          <button className="btn btn-secondary">
+          <Link href={`/topics/${topicId}/coverage`} className="btn btn-secondary">
             <ShieldCheck className="h-4 w-4" /> Validate
-          </button>
-          <button className="btn btn-secondary">
-            <Eye className="h-4 w-4" /> Preview
-          </button>
-          <button className="btn btn-primary">
-            <Send className="h-4 w-4" /> Submit for Review
-          </button>
-          <button className="lg-chip flex h-9 w-9 items-center justify-center rounded-btn text-slate-blue">
-            <MoreHorizontal className="h-4 w-4" />
-          </button>
+          </Link>
         </div>
       </div>
 

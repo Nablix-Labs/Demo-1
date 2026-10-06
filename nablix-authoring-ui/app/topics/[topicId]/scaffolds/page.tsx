@@ -8,7 +8,7 @@ import { useTopicId } from '@/lib/useTopicId';
  * (guide §10.1). Steps render in stage_no order.
  */
 import { useEffect, useState } from 'react';
-import { Layers, Plus, ListOrdered, Link2, Copy } from 'lucide-react';
+import { Layers, ListOrdered, Link2, Copy } from 'lucide-react';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading, Meta } from '@/components/nablix/SectionHeader';
 import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
@@ -49,11 +49,6 @@ export default function ScaffoldsPage() {
         icon={<Layers className="h-3.5 w-3.5" />}
         title="Scaffolds & Parallel Examples"
         description="Step-by-step rescue routes, and the fresh examples used to re-test a repaired misconception."
-        action={
-          <button className="btn btn-primary">
-            <Plus className="h-4 w-4" /> Add {isScaffoldTab ? 'Scaffold' : 'Parallel Example'}
-          </button>
-        }
       />
 
       <div className="flex flex-wrap items-center gap-1 border-b border-muted-gray/70">

@@ -7,7 +7,7 @@ import { useTopicId } from '@/lib/useTopicId';
  * impact, not editable children (guide §9.1).
  */
 import { useEffect, useState } from 'react';
-import { AlertTriangle, Plus, Lightbulb, Image as ImageIcon, Target, Copy, HelpCircle } from 'lucide-react';
+import { AlertTriangle, Lightbulb, Image as ImageIcon, Target, Copy, HelpCircle } from 'lucide-react';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading, Meta } from '@/components/nablix/SectionHeader';
 import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
@@ -20,12 +20,10 @@ function SupportList({
   icon,
   title,
   items,
-  addLabel,
 }: {
   icon: React.ReactNode;
   title: string;
   items: SupportChild[];
-  addLabel: string;
 }) {
   return (
     <section className="sheet overflow-hidden">
@@ -33,9 +31,6 @@ function SupportList({
       {items.length === 0 ? (
         <div className="px-5 py-6 text-center">
           <p className="text-sm font-semibold text-action-orange">None created for this misconception.</p>
-          <button className="btn btn-secondary mt-2">
-            <Plus className="h-4 w-4" /> {addLabel}
-          </button>
         </div>
       ) : (
         <ol>
@@ -92,11 +87,6 @@ export default function MisconceptionsPage() {
         icon={<AlertTriangle className="h-3.5 w-3.5" />}
         title="Errors & Misconceptions"
         description="What students get wrong, the errors that diagnose it, and the support that repairs it."
-        action={
-          <button className="btn btn-primary">
-            <Plus className="h-4 w-4" /> Add Misconception
-          </button>
-        }
       />
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
@@ -133,6 +123,14 @@ export default function MisconceptionsPage() {
 
         <div className="min-w-0 space-y-4">
           {node && <HealthIssues health={node.content_health} />}
+
+          {/* The API sends the full record for its default selection only and
+              takes no selection parameter, so other rows show list data. */}
+          {node && !detail && (
+            <p className="sheet px-5 py-4 text-sm text-slate-blue">
+              The API only returns the description and affected questions for the topic&apos;s default selection.
+            </p>
+          )}
 
           {detail && (
             <section className="sheet overflow-hidden">
@@ -180,12 +178,11 @@ export default function MisconceptionsPage() {
                 </div>
               </section>
 
-              <SupportList icon={<Lightbulb className="h-4 w-4" />} title="Hints" items={children.hints} addLabel="Add Hint" />
+              <SupportList icon={<Lightbulb className="h-4 w-4" />} title="Hints" items={children.hints} />
               <SupportList
                 icon={<ImageIcon className="h-4 w-4" />}
                 title="Visual Cues"
                 items={children.visual_cues}
-                addLabel="Add Visual Cue"
               />
 
               <section className="sheet overflow-hidden">
@@ -216,7 +213,7 @@ export default function MisconceptionsPage() {
               <CardHeader
                 icon={<HelpCircle className="h-4 w-4" />}
                 title={`Affected Questions · ${detail.affected_questions.length}`}
-                action={<span className="text-2xs text-slate-blue">derived impact — edit on the question page</span>}
+                action={<span className="text-2xs text-slate-blue">derived impact</span>}
               />
               <ul>
                 {detail.affected_questions.map((q) => (

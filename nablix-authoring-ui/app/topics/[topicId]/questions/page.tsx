@@ -10,13 +10,12 @@ import { useTopicId } from '@/lib/useTopicId';
  * previously selected question stays on screen (guide §8).
  */
 import { useEffect, useState } from 'react';
-import { HelpCircle, Plus, Target, ListChecks, CheckCircle2, AlertOctagon } from 'lucide-react';
+import { HelpCircle, Target, ListChecks, CheckCircle2, AlertOctagon } from 'lucide-react';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading, WeightChip, Meta } from '@/components/nablix/SectionHeader';
 import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
-import { QuestionWizard } from '@/components/nablix/QuestionWizard';
 import { apiV3 } from '@/lib/api/v3Adapter';
-import type { MicroSkill, QuestionPhase, QuestionsData } from '@/lib/api/v3-contracts';
+import type { QuestionPhase, QuestionsData } from '@/lib/api/v3-contracts';
 import { useSelectionOverride } from '@/lib/use-selection-override';
 import { cn } from '@/lib/utils';
 
@@ -34,8 +33,6 @@ export default function QuestionsPage() {
   );
   const [data, setData] = useState<QuestionsData | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [skills, setSkills] = useState<MicroSkill[]>([]);
-  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -51,10 +48,6 @@ export default function QuestionsPage() {
     };
   }, [topicId, phase, override.select]);
 
-  useEffect(() => {
-    apiV3.getMicroSkills(topicId).then((d) => setSkills([d.selected_item.details]));
-  }, [topicId]);
-
   const questions = data?.hierarchy.questions ?? [];
   const node = questions.find((q) => q.question_id === selected) ?? null;
   /** The package the API sent is only valid for the question it was built for. */
@@ -67,16 +60,7 @@ export default function QuestionsPage() {
         icon={<HelpCircle className="h-3.5 w-3.5" />}
         title="Question Builder"
         description="Question, usage, micro-skill mapping, answer specification and error mappings form one package."
-        action={
-          !creating && (
-            <button className="btn btn-primary" onClick={() => setCreating(true)}>
-              <Plus className="h-4 w-4" /> New Question
-            </button>
-          )
-        }
       />
-
-      {creating && <QuestionWizard microSkills={skills} onClose={() => setCreating(false)} />}
 
       <div className="flex flex-wrap items-center gap-1 border-b border-muted-gray/70">
         {PHASES.map((p) => (
@@ -136,6 +120,14 @@ export default function QuestionsPage() {
 
           <div className="min-w-0 space-y-4">
             {node && <HealthIssues health={node.content_health} />}
+
+            {/* The API sends the full record for its default selection only and
+                takes no selection parameter, so other rows show list data. */}
+            {node && !pkg && (
+              <p className="sheet px-5 py-4 text-sm text-slate-blue">
+                The API only returns the full question package for this phase&apos;s default question.
+              </p>
+            )}
 
             {pkg && (
               <>
