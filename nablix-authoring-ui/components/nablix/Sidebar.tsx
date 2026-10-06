@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { Logo } from '@/components/nablix/Logo';
 import { BASE_PATH, authRequired, signOut } from '@/lib/auth';
 import { usePathname } from 'next/navigation';
 import {
@@ -35,11 +36,12 @@ const NAV = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const [collapsed, setCollapsed] = useState(false);
+  // Collapsed by default (Manav, 6 Oct); an approver who expands it keeps it expanded.
+  const [collapsed, setCollapsed] = useState(true);
 
   // Persist the collapsed choice across reloads.
   useEffect(() => {
-    setCollapsed(localStorage.getItem('nbx-sidebar-collapsed') === '1');
+    setCollapsed(localStorage.getItem('nbx-sidebar-collapsed') !== '0');
   }, []);
   const toggle = () => {
     setCollapsed((c) => {
@@ -79,9 +81,7 @@ export function Sidebar() {
     >
       {/* Brand */}
       <div className={cn('flex items-center py-5', collapsed ? 'justify-center px-0' : 'gap-2.5 px-5')}>
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[11px] bg-lime text-base font-black text-focus-navy shadow-[0_4px_14px_rgba(203,242,74,0.45)]">
-          N
-        </div>
+        <Logo size={36} className="shrink-0 ring-1 ring-white/15" />
         {!collapsed && (
           <div className="leading-tight">
             <div className="font-display text-[17px] font-extrabold tracking-tight text-white">Nablix</div>

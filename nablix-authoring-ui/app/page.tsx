@@ -149,24 +149,27 @@ export default function DashboardPage() {
             </div>
           </section>
 
-          {/* Spotlight — dark panel with liquid glass + lime CTA */}
-          <section className="spotlight flex flex-col overflow-hidden rounded-card p-5">
+          {/* Review queue — light card, same surface as the content bank beside it */}
+          <section className="lg-glass flex flex-col overflow-hidden rounded-card p-5">
             <div>
-              <div className="text-2xs font-bold uppercase tracking-widest text-lime">Review Queue</div>
+              <div className="flex items-center gap-2 text-2xs font-bold uppercase tracking-widest text-slate-blue">
+                <span className="h-2 w-2 rounded-full bg-lime ring-2 ring-lime/30" />
+                Review Queue
+              </div>
               <div className="mt-2 flex items-end gap-2">
-                <span className="font-display text-5xl font-bold tabular-nums leading-none text-white">{inReview}</span>
-                <span className="max-w-[110px] pb-1 text-sm leading-tight text-white/60">topics awaiting review</span>
+                <span className="font-display text-5xl font-bold tabular-nums leading-none text-focus-navy">{inReview}</span>
+                <span className="max-w-[110px] pb-1 text-sm leading-tight text-slate-blue">topics awaiting review</span>
               </div>
             </div>
 
             <div className="mt-auto grid grid-cols-2 gap-2 pt-6">
-              <div className="rounded-[14px] bg-white/5 px-3 py-2.5 ring-1 ring-inset ring-white/10">
-                <div className="font-display text-2xl font-bold tabular-nums text-white">{topics ? warningTotal : '—'}</div>
-                <div className="text-2xs font-semibold uppercase tracking-wide text-white/55">Warnings</div>
+              <div className="rounded-[14px] bg-white/70 px-3 py-2.5 ring-1 ring-inset ring-muted-gray">
+                <div className="font-display text-2xl font-bold tabular-nums text-focus-navy">{topics ? warningTotal : '—'}</div>
+                <div className="text-2xs font-semibold uppercase tracking-wide text-slate-blue">Warnings</div>
               </div>
-              <div className="rounded-[14px] bg-white/5 px-3 py-2.5 ring-1 ring-inset ring-white/10">
+              <div className="rounded-[14px] bg-white/70 px-3 py-2.5 ring-1 ring-inset ring-muted-gray">
                 <div className="font-display text-2xl font-bold tabular-nums text-danger">{topics ? blockingTotal : '—'}</div>
-                <div className="text-2xs font-semibold uppercase tracking-wide text-white/55">Blocking</div>
+                <div className="text-2xs font-semibold uppercase tracking-wide text-slate-blue">Blocking</div>
               </div>
             </div>
 

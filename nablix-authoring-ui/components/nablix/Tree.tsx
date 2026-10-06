@@ -63,10 +63,12 @@ function Row({
   const inner = (
     <div
       className={cn(
-        'group/row flex items-center gap-1.5 rounded-lg py-1.5 pr-1.5 text-[13px] transition-colors',
+        // Each row is its own bordered box (Manav, 6 Oct), so the sections
+        // read as separate items rather than a run of text.
+        'group/row flex items-center gap-1.5 border py-2 pr-2 text-[13px] transition-colors',
         active
-          ? 'bg-learning-blue/12 font-semibold text-learning-blue'
-          : 'text-ink/80 hover:bg-reading-surface',
+          ? 'border-learning-blue/50 bg-learning-blue/10 font-semibold text-learning-blue'
+          : 'border-muted-gray/80 bg-white/70 text-ink/80 hover:border-slate-blue/40 hover:bg-white',
       )}
       style={{ paddingLeft: 6 + depth * 14 }}
     >
@@ -112,7 +114,7 @@ function Row({
     <li>
       {href ? <Link href={href}>{inner}</Link> : inner}
       {hasChildren && open && (
-        <ul className="lg-anim-fade">
+        <ul className="lg-anim-fade mt-1 space-y-1">
           {node.children!.map((child) => (
             <Row key={child.id} node={child} topicId={topicId} depth={depth + 1} activeRoute={activeRoute} />
           ))}
@@ -132,7 +134,7 @@ export function Tree({
   activeRoute: string;
 }) {
   return (
-    <ul className="lg-scroll space-y-0.5 overflow-y-auto px-2 py-2">
+    <ul className="lg-scroll space-y-1.5 overflow-y-auto px-3 py-2">
       {root.children?.map((node) => (
         <Row key={node.id} node={node} topicId={topicId} depth={0} activeRoute={activeRoute} />
       ))}

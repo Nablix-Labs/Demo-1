@@ -4,6 +4,7 @@ import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { LogIn } from 'lucide-react';
 import { signIn } from '@/lib/auth';
+import { Logo } from '@/components/nablix/Logo';
 
 function LoginForm() {
   const router = useRouter();
@@ -33,8 +34,11 @@ function LoginForm() {
   return (
     <form onSubmit={submit} className="sheet w-full max-w-[400px] space-y-4 p-7">
       <div>
-        <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-slate-blue">Nablix</p>
-        <h1 className="mt-1 text-2xl font-bold text-ink">Content Approver Portal</h1>
+        <div className="flex items-center gap-2.5">
+          <Logo size={34} />
+          <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-slate-blue">Nablix · Authoring</p>
+        </div>
+        <h1 className="mt-3 text-2xl font-bold text-ink">Content Approver Portal</h1>
         <p className="mt-1 text-sm text-slate-blue">Sign in with your approver account.</p>
       </div>
       <div>

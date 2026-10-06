@@ -11,7 +11,7 @@ import { StatusPill } from '@/components/nablix/StatusPill';
 import { WorkspaceProvider } from '@/lib/workspace-context';
 import { buildTopicTree, healthByRoute } from '@/lib/tree';
 import { apiV3 } from '@/lib/api/v3Adapter';
-import type { CoverageData, TopicDetailsData } from '@/lib/api/v3-contracts';
+import type { CoverageData, TopicDetailsData, ValidationIssue } from '@/lib/api/v3-contracts';
 
 export function TopicWorkspaceShell({ children }: { children: React.ReactNode }) {
   const topicId = useTopicId();
@@ -112,7 +112,10 @@ export function TopicWorkspaceShell({ children }: { children: React.ReactNode })
         {/* Right — validation / coverage */}
         <div className="lg-glass min-h-0 rounded-card">
           {ws ? (
-            <ValidationPanel counts={ws.hierarchy_counts} issues={coverage?.validation_summary.issues ?? []} />
+            <ValidationPanel
+              counts={ws.hierarchy_counts}
+              issues={[...(coverage?.validation_summary.issues ?? []), ...coverageGapIssues(coverage)]}
+            />
           ) : (
             <div className="space-y-2 p-4">
               {Array.from({ length: 5 }).map((_, i) => (
@@ -134,5 +137,30 @@ function TreeSkeleton() {
         <div key={i} className="h-7 animate-pulse rounded-lg bg-white/40" style={{ marginLeft: (i % 3) * 12 }} />
       ))}
     </div>
+  );
+}
+
+/**
+ * The coverage grid's blocking cells, as validation issues.
+ *
+ * The API keeps them apart from `validation_summary` — "those two numbers don't
+ * roll up into each other" (reference, page 14) — but both block publishing.
+ * Without these the panel said "No blocking errors" on ALG-ORI-03 while the
+ * dashboard counted one: T03.M6 had no misconceptions (live, 6 Oct).
+ */
+function coverageGapIssues(coverage: CoverageData | null): ValidationIssue[] {
+  if (!coverage) return [];
+  return coverage.coverage_rows.flatMap((row) =>
+    Object.entries(row.cells)
+      .filter(([, cell]) => cell.content_health?.blocking)
+      .map(([dimension, cell]) => ({
+        code: 'COVERAGE_BELOW_MINIMUM',
+        severity: 'ERROR' as const,
+        record_type: 'MICRO_SKILL',
+        record_id: `${row.micro_skill_id}:${dimension}`,
+        message: `${row.skill_name}: ${cell.count} of ${cell.required_min} ${dimension.replace(/_/g, ' ')} needed.`,
+        blocking: true,
+        navigate_to: { page_id: 'COVERAGE_VALIDATION' },
+      })),
   );
 }

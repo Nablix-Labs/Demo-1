@@ -257,3 +257,12 @@ body {
     box-shadow: 0 8px 30px rgba(20, 33, 61, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.85);
   }
 }
+
+/* Square corners everywhere (Manav, 6 Oct). One override rather than editing
+   every rounded-* class and inline radius; !important also beats the inline
+   radii the glass components set. */
+*,
+*::before,
+*::after {
+  border-radius: 0 !important;
+}
