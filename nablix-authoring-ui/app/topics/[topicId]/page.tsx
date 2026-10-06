@@ -1,10 +1,15 @@
-import { redirect } from 'next/navigation';
+'use client';
 
-export default async function TopicIndex({
-  params,
-}: {
-  params: Promise<{ topicId: string }>;
-}) {
-  const { topicId } = await params;
-  redirect(`/topics/${topicId}/details`);
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useTopicId } from '@/lib/useTopicId';
+
+/** A topic opens on its details tab. Client-side, so it works in the static export. */
+export default function TopicIndex() {
+  const router = useRouter();
+  const topicId = useTopicId();
+  useEffect(() => {
+    if (topicId) router.replace(`/topics/${encodeURIComponent(topicId)}/details`);
+  }, [router, topicId]);
+  return null;
 }

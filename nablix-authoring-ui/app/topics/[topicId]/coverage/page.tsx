@@ -1,5 +1,6 @@
 'use client';
 
+import { useTopicId } from '@/lib/useTopicId';
 /**
  * Coverage & Validation — v3 page 14. The grid is the primary surface; there is
  * no editor default. Cells carry their own health and required_min, and issues
@@ -8,7 +9,6 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { BarChart3, ShieldCheck } from 'lucide-react';
-import { useParams } from 'next/navigation';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading } from '@/components/nablix/SectionHeader';
 import { HealthBadge } from '@/components/nablix/HealthBadge';
@@ -18,7 +18,7 @@ import { linkForCoverageCell, linkForIssue } from '@/lib/tree';
 import { cn } from '@/lib/utils';
 
 export default function CoveragePage() {
-  const { topicId } = useParams<{ topicId: string }>();
+  const topicId = useTopicId();
   const [data, setData] = useState<CoverageData | null>(null);
 
   useEffect(() => {

@@ -1,5 +1,6 @@
 'use client';
 
+import { useTopicId } from '@/lib/useTopicId';
 /**
  * Micro-skills — v3 page 05. Topic → Micro-skill → linked questions and
  * misconceptions. Selecting a skill replaces every linked list with that
@@ -7,7 +8,6 @@
  */
 import { useEffect, useState } from 'react';
 import { Target, Plus, HelpCircle, Link2 } from 'lucide-react';
-import { useParams } from 'next/navigation';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading, Meta } from '@/components/nablix/SectionHeader';
 import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
@@ -17,7 +17,7 @@ import { useSelectionOverride } from '@/lib/use-selection-override';
 import { cn } from '@/lib/utils';
 
 export default function MicroSkillsPage() {
-  const { topicId } = useParams<{ topicId: string }>();
+  const topicId = useTopicId();
   const override = useSelectionOverride();
   const [data, setData] = useState<MicroSkillsData | null>(null);
   const [selected, setSelected] = useState<string | null>(null);

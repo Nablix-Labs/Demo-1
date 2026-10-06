@@ -1,5 +1,6 @@
 'use client';
 
+import { useTopicId } from '@/lib/useTopicId';
 /**
  * Preview, Review & Publish — v3 page 15. Sections render in learner order, not
  * table order, and the action buttons come from workflow.available_actions —
@@ -7,7 +8,6 @@
  */
 import { useEffect, useState } from 'react';
 import { Send, Eye, ShieldCheck, CircleAlert, ArrowRight, Lock } from 'lucide-react';
-import { useParams } from 'next/navigation';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading } from '@/components/nablix/SectionHeader';
 import { HealthBadge } from '@/components/nablix/HealthBadge';
@@ -48,7 +48,7 @@ function actionKind(action: string): 'approve' | 'return' | 'unwired' {
 }
 
 export default function PublishPage() {
-  const { topicId } = useParams<{ topicId: string }>();
+  const topicId = useTopicId();
   const [data, setData] = useState<PreviewPublishData | null>(null);
   /** The action awaiting a comment, or null when no panel is open. */
   const [commenting, setCommenting] = useState<'approve' | 'return' | null>(null);

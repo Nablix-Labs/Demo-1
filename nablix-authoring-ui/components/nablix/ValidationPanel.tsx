@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useTopicId } from '@/lib/useTopicId';
 import { CircleAlert, TriangleAlert, ShieldCheck } from 'lucide-react';
 import type { TopicDetailsData, ValidationIssue } from '@/lib/api/v3-contracts';
 import { linkForIssue } from '@/lib/tree';
@@ -19,7 +19,7 @@ export function ValidationPanel({
   counts?: TopicDetailsData['hierarchy_counts'];
   issues: ValidationIssue[];
 }) {
-  const { topicId } = useParams<{ topicId: string }>();
+  const topicId = useTopicId();
   const blocking = issues.filter((i) => i.blocking);
   const warnings = issues.filter((i) => !i.blocking);
 

@@ -1,5 +1,6 @@
 'use client';
 
+import { useTopicId } from '@/lib/useTopicId';
 /**
  * Orientation — v3 page 06. Video → Scenes and Support Cards are sibling
  * branches: selecting a card must not leave a scene editor open (guide §7.1).
@@ -7,7 +8,6 @@
  */
 import { useEffect, useState } from 'react';
 import { PlayCircle, Plus, LayoutGrid, Clock } from 'lucide-react';
-import { useParams } from 'next/navigation';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading, Meta } from '@/components/nablix/SectionHeader';
 import { StatusPill } from '@/components/nablix/StatusPill';
@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils';
 type Branch = 'SCENES' | 'CARDS';
 
 export default function OrientationPage() {
-  const { topicId } = useParams<{ topicId: string }>();
+  const topicId = useTopicId();
   const [data, setData] = useState<OrientationData | null>(null);
   const [branch, setBranch] = useState<Branch>('SCENES');
   const [selected, setSelected] = useState<string | null>(null);

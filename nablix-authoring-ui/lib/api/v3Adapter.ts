@@ -6,6 +6,7 @@
  *
  * Switch with NEXT_PUBLIC_API_MODE=http.
  */
+import { API_ERROR_EVENT, getToken, redirectToLogin } from '@/lib/auth';
 import sample from './v3/t02-allpages-v3.json';
 import type {
   AuthoringApiV3,
@@ -94,14 +95,59 @@ function mockWorkflowAction(action: 'APPROVE' | 'RETURN', comment?: string): Pro
   return Promise.resolve();
 }
 
+/**
+ * What the approver should read for a failed call. The API's own error body is
+ * `{error_code, message, field}` on every route (reference, Quick start §4).
+ */
+function failureMessage(status: number, body: { error_code?: string; message?: string; detail?: string }): string {
+  switch (body.error_code ?? '') {
+    case 'FORBIDDEN':
+      return 'This account is not an approver. Sign in with an admin account.';
+    case 'INVALID_WORKFLOW_TRANSITION':
+      // Reference: "surface this as someone else already acted on this topic".
+      return 'Someone else has already acted on this topic. Refresh to see its current state.';
+    case 'COMMENT_REQUIRED':
+    case 'VALIDATION_ERROR':
+      return body.message && body.error_code === 'VALIDATION_ERROR' && !/comment/i.test(body.message)
+        ? body.message
+        : 'Enter a reason before returning this topic.';
+    default:
+      return body.message ?? body.detail ?? `The authoring API failed (${status}).`;
+  }
+}
+
 /** Endpoint paths are the `suggested_endpoint` values from the contract. */
 export function createHttpApiV3(base: string): AuthoringApiV3 {
-  const get = async <T>(path: string): Promise<T> => {
-    const res = await fetch(`${base}${path}`, { headers: { Accept: 'application/json' } });
-    if (!res.ok) {
-      throw new Error(`Authoring API ${path} failed: ${res.status} ${res.statusText}`);
+  const request = async (path: string, init: RequestInit = {}): Promise<Response> => {
+    const token = getToken();
+    const res = await fetch(`${base}${path}`, {
+      ...init,
+      headers: {
+        Accept: 'application/json',
+        ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+    // INVALID_TOKEN / TOKEN_EXPIRED: "re-login and retry".
+    if (res.status === 401) {
+      redirectToLogin();
+      throw new Error('Your session has expired. Sign in again.');
     }
-    const body = (await res.json()) as PageResponse<T>;
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const message = failureMessage(res.status, body);
+      // Most pages load with a bare `.then(setData)` and would otherwise sit on
+      // their loading state forever. AuthGate shows this as a banner.
+      if (!init.method && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent(API_ERROR_EVENT, { detail: message }));
+      }
+      throw new Error(message);
+    }
+    return res;
+  };
+
+  const get = async <T>(path: string): Promise<T> => {
+    const body = (await (await request(path)).json()) as PageResponse<T>;
     if (!body.success) {
       throw new Error(`Authoring API ${path} returned success=false`);
     }
@@ -109,29 +155,11 @@ export function createHttpApiV3(base: string): AuthoringApiV3 {
   };
 
   /**
-   * A workflow action. Unlike `get`, the reply is not read: the resulting
-   * workflow state is re-fetched from the page endpoint so the server stays the
-   * one deciding it.
-   *
-   * The server's message is preferred over the status line when it sends one —
-   * role gating is enforced (a caller without the approver role gets 403
-   * FORBIDDEN with an `error_code`), and "You do not have permission to access
-   * this resource" tells an approver what to do about it in a way that
-   * "Forbidden" does not.
+   * A workflow action. The reply is not read: the resulting workflow state is
+   * re-fetched from the page endpoint so the server stays the one deciding it.
    */
   const post = async (path: string, body: Record<string, string>): Promise<void> => {
-    const res = await fetch(`${base}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const detail = await res
-        .json()
-        .then((b: { message?: string; detail?: string }) => b.message ?? b.detail ?? '')
-        .catch(() => '');
-      throw new Error(detail || `Authoring API ${path} failed: ${res.status} ${res.statusText}`);
-    }
+    await request(path, { method: 'POST', body: JSON.stringify(body) });
   };
 
   const topic = (id: string, section: string) => `/topics/${encodeURIComponent(id)}/${section}`;

@@ -1,5 +1,6 @@
 'use client';
 
+import { useTopicId } from '@/lib/useTopicId';
 /**
  * Scaffolds & Parallel Examples — v3 page 13. Two tabs over different
  * hierarchies: Topic → Scaffold → steps/question links, and Misconception →
@@ -8,7 +9,6 @@
  */
 import { useEffect, useState } from 'react';
 import { Layers, Plus, ListOrdered, Link2, Copy } from 'lucide-react';
-import { useParams } from 'next/navigation';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading, Meta } from '@/components/nablix/SectionHeader';
 import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
@@ -17,7 +17,7 @@ import type { ScaffoldsData } from '@/lib/api/v3-contracts';
 import { cn } from '@/lib/utils';
 
 export default function ScaffoldsPage() {
-  const { topicId } = useParams<{ topicId: string }>();
+  const topicId = useTopicId();
   const [data, setData] = useState<ScaffoldsData | null>(null);
   const [tab, setTab] = useState<string>('SCAFFOLDS');
   const [selected, setSelected] = useState<string | null>(null);

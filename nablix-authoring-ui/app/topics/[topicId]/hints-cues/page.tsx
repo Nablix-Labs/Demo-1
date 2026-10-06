@@ -1,5 +1,6 @@
 'use client';
 
+import { useTopicId } from '@/lib/useTopicId';
 /**
  * Hints & Visual Cues — v3 page 12.
  *
@@ -11,7 +12,6 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { Lightbulb, Plus, Image as ImageIcon, Link2, Users } from 'lucide-react';
-import { useParams } from 'next/navigation';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading, Toggle, Meta } from '@/components/nablix/SectionHeader';
 import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
@@ -35,7 +35,7 @@ function childrenFor(group: MisconceptionGroup | undefined, tab: SupportTabId): 
 }
 
 export default function HintsCuesPage() {
-  const { topicId } = useParams<{ topicId: string }>();
+  const topicId = useTopicId();
   const override = useSelectionOverride();
   const [data, setData] = useState<HintsVisualCuesData | null>(null);
   const [parentId, setParentId] = useState<string | null>(null);

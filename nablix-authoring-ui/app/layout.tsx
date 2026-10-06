@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { Public_Sans, IBM_Plex_Mono } from 'next/font/google';
 import './globals.css';
-import { Sidebar } from '@/components/nablix/Sidebar';
+import { AuthGate } from '@/components/nablix/AuthGate';
 
 // Public Sans — clean, neutral, highly legible — used across body + headings.
 // IBM Plex Mono for IDs & codes.
@@ -29,10 +29,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <div className="lg-root">
           <div className="lg-ambient" />
-          <div className="relative z-10 flex h-screen overflow-hidden">
-            <Sidebar />
-            <div className="flex min-w-0 flex-1 flex-col">{children}</div>
-          </div>
+          <AuthGate>{children}</AuthGate>
         </div>
       </body>
     </html>

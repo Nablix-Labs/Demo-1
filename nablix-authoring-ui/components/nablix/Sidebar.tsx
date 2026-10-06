@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { BASE_PATH, authRequired, signOut } from '@/lib/auth';
 import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard,
@@ -16,8 +17,7 @@ import {
   ClipboardCheck,
   Settings,
   PanelLeftClose,
-  PanelLeftOpen,
-} from 'lucide-react';
+  PanelLeftOpen, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const NAV = [
@@ -108,6 +108,19 @@ export function Sidebar() {
           <Settings className="h-[20px] w-[20px] shrink-0 text-white/65 group-hover:text-white" strokeWidth={2} />
           {!collapsed && 'Settings'}
         </Link>
+        {authRequired && (
+          <button
+            onClick={() => { signOut(); window.location.assign(`${BASE_PATH}/login`); }}
+            title={collapsed ? 'Sign out' : undefined}
+            className={cn(
+              'group flex w-full items-center rounded-[12px] text-[14px] font-semibold text-white/60 transition-all hover:bg-white/10 hover:text-white',
+              collapsed ? 'h-11 w-11 justify-center' : 'gap-3 px-3 py-2.5',
+            )}
+          >
+            <LogOut className="h-[20px] w-[20px] shrink-0" strokeWidth={2} />
+            {!collapsed && 'Sign out'}
+          </button>
+        )}
         <button
           onClick={toggle}
           title={collapsed ? 'Expand' : 'Collapse'}

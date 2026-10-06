@@ -1,5 +1,6 @@
 'use client';
 
+import { useTopicId } from '@/lib/useTopicId';
 /**
  * Questions — v3 pages 08/09/10. One shape, three phases; the phase decides
  * which questions are listed and which usage rules apply.
@@ -10,7 +11,6 @@
  */
 import { useEffect, useState } from 'react';
 import { HelpCircle, Plus, Target, ListChecks, CheckCircle2, AlertOctagon } from 'lucide-react';
-import { useParams } from 'next/navigation';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading, WeightChip, Meta } from '@/components/nablix/SectionHeader';
 import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
@@ -27,7 +27,7 @@ const PHASES: { id: QuestionPhase; label: string }[] = [
 ];
 
 export default function QuestionsPage() {
-  const { topicId } = useParams<{ topicId: string }>();
+  const topicId = useTopicId();
   const override = useSelectionOverride();
   const [phase, setPhase] = useState<QuestionPhase>(
     (override.phase as QuestionPhase) ?? 'PHASE_0_DIAGNOSTIC',

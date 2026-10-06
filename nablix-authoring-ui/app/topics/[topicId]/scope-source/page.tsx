@@ -1,12 +1,12 @@
 'use client';
 
+import { useTopicId } from '@/lib/useTopicId';
 /**
  * Scope & Source — v3 page 04. Selecting a group shows only that group's items;
  * the source group carries provenance fields rather than scope text (guide §6.2).
  */
 import { useEffect, useState } from 'react';
 import { ListFilter, Plus } from 'lucide-react';
-import { useParams } from 'next/navigation';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading, Meta } from '@/components/nablix/SectionHeader';
 import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
@@ -17,7 +17,7 @@ import { cn } from '@/lib/utils';
 const str = (v: unknown) => (typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v ?? '—'));
 
 export default function ScopeSourcePage() {
-  const { topicId } = useParams<{ topicId: string }>();
+  const topicId = useTopicId();
   const [data, setData] = useState<ScopeSourceData | null>(null);
   const [groupId, setGroupId] = useState<string | null>(null);
 

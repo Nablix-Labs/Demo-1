@@ -1,5 +1,6 @@
 'use client';
 
+import { useTopicId } from '@/lib/useTopicId';
 /**
  * Misconceptions — v3 page 11. Selecting a misconception replaces every child
  * list with that misconception's own mappings. Affected questions are derived
@@ -7,7 +8,6 @@
  */
 import { useEffect, useState } from 'react';
 import { AlertTriangle, Plus, Lightbulb, Image as ImageIcon, Target, Copy, HelpCircle } from 'lucide-react';
-import { useParams } from 'next/navigation';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading, Meta } from '@/components/nablix/SectionHeader';
 import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
@@ -65,7 +65,7 @@ function SupportList({
 }
 
 export default function MisconceptionsPage() {
-  const { topicId } = useParams<{ topicId: string }>();
+  const topicId = useTopicId();
   const override = useSelectionOverride();
   const [data, setData] = useState<MisconceptionsData | null>(null);
   const [selected, setSelected] = useState<string | null>(null);

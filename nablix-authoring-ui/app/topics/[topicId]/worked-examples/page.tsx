@@ -1,5 +1,6 @@
 'use client';
 
+import { useTopicId } from '@/lib/useTopicId';
 /**
  * Worked Examples — v3 page 07. Selecting an example replaces its steps and
  * micro-skill mappings with that example's own children; examples are never
@@ -7,7 +8,6 @@
  */
 import { useEffect, useState } from 'react';
 import { FlaskConical, Plus, ListOrdered, Target } from 'lucide-react';
-import { useParams } from 'next/navigation';
 import { CardHeader } from '@/components/nablix/GlassCard';
 import { SectionHeader, SectionLoading, Meta, WeightChip } from '@/components/nablix/SectionHeader';
 import { StatusPill } from '@/components/nablix/StatusPill';
@@ -18,7 +18,7 @@ import { useSelectionOverride } from '@/lib/use-selection-override';
 import { cn } from '@/lib/utils';
 
 export default function WorkedExamplesPage() {
-  const { topicId } = useParams<{ topicId: string }>();
+  const topicId = useTopicId();
   const override = useSelectionOverride();
   const [data, setData] = useState<WorkedExamplesData | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
