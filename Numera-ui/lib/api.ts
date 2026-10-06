@@ -70,7 +70,7 @@ export const api = axios.create({
 // with the store.
 api.interceptors.request.use((config) => {
   const token = useAuthStore.getState().accessToken ?? (allowAnonTutorCalls ? ANON_ACCESS_TOKEN : null);
-  if (token) config.headers.Authorization = `Bearer ${token}`;
+  if (token && !config.headers.Authorization) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
 
@@ -109,7 +109,7 @@ api.interceptors.response.use(
     const status = (error as { response?: { status?: number } })?.response?.status;
     // A FAILED call is the one a tester most needs to see, so capture it too.
     const failed = error as {
-      config?: { method?: string; url?: string; data?: unknown };
+      config?: { method?: string; url?: string; data?: unknown; headers?: { Authorization?: string } };
       response?: { data?: unknown };
     };
     if (failed?.config) {
@@ -119,8 +119,11 @@ api.interceptors.response.use(
         failed.response?.data ?? String(error),
       );
     }
-    const realLogin = useAuthStore.getState().accessToken !== null;
-    if (status === 401 && realLogin) {
+    const currentToken = useAuthStore.getState().accessToken;
+    const rejectedBearer = failed.config?.headers?.Authorization;
+    const rejectedCurrentLogin = currentToken !== null && rejectedBearer === `Bearer ${currentToken}`;
+    // A delayed rejection from a previous login must not sign out the new one.
+    if (status === 401 && rejectedCurrentLogin) {
       console.warn('[auth] the server rejected our login — signing out');
       useAuthStore.getState().logout();
     }

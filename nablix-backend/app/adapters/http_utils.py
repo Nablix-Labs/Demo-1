@@ -1,12 +1,12 @@
 """Shared HTTP helper for adapters that call live downstream services.
 
 Adapters still own their DTO-specific parsing and error naming. This module
-only handles the common mechanics: POST JSON, retry transient transport or
+only handles the common mechanics: send JSON, retry transient transport or
 server errors, require an object JSON response, and raise `AdapterError` with
 request/response context when the call cannot be trusted.
 """
 
-from typing import cast
+from typing import Literal, cast
 
 import httpx
 
@@ -17,21 +17,23 @@ from app.core.logger import logger
 JsonObject = dict[str, object]
 
 
-async def post_json(
+async def request_json(
+    method: Literal["GET", "POST", "PATCH"],
     adapter_name: str,
     url: str,
-    payload: JsonObject,
+    payload: JsonObject | None,
     headers: dict[str, str],
     timeout_seconds: int,
     retry_count: int,
 ) -> JsonObject:
-    """POST JSON with bounded retries and return the parsed JSON object."""
+    """Send JSON with bounded retries and require an object response."""
 
     max_attempts: int = retry_count + 1
     for attempt in range(1, max_attempts + 1):
         try:
             async with httpx.AsyncClient(timeout=timeout_seconds) as http_client:
-                response: httpx.Response = await http_client.post(
+                response: httpx.Response = await http_client.request(
+                    method,
                     url,
                     json=payload,
                     headers=headers,
@@ -73,7 +75,7 @@ async def post_json(
                     url,
                     response.status_code,
                     response.text,
-                    payload,
+                    payload or {},
                 )
             raise AdapterError(
                 adapter_name,
@@ -96,6 +98,20 @@ async def post_json(
         return cast(JsonObject, body)
 
     raise AdapterError(adapter_name, f"request exhausted retries url={url} payload={payload}")
+
+
+async def post_json(
+    adapter_name: str,
+    url: str,
+    payload: JsonObject,
+    headers: dict[str, str],
+    timeout_seconds: int,
+    retry_count: int,
+) -> JsonObject:
+    """POST JSON through the shared transport."""
+    return await request_json(
+        "POST", adapter_name, url, payload, headers, timeout_seconds, retry_count
+    )
 
 
 async def get_bytes(

@@ -14,24 +14,25 @@
  * yellow, because colour here still has to obey the brand rule that colour
  * always means something (see tailwind.config.ts).
  *
- * Everything on this page reads from the real stores. Nothing is invented: if
- * the backend has not sent a value, the card says so instead of showing a
- * plausible number.
+ * Identity and preferences come from the authenticated profile API.
+ * Existing topic progress remains device-local and is labelled accordingly.
  */
 
-import { useRef, useState } from 'react';
+import { useState } from 'react';
+import type { FormEvent, ReactElement } from 'react';
 import {
-  ChevronDown, ShieldCheck, LogOut, Mic, Type, PanelLeft, PanelRight, Camera, Trash2,
+  ChevronDown, LogOut,
   Check, Stethoscope, Compass, GraduationCap, BookOpen, PenLine, RotateCcw,
 } from 'lucide-react';
 import PageShell from '@/components/PageShell';
 import { cn } from '@/lib/cn';
 import { useSignOut } from '@/hooks/useSignOut';
 import {
-  useAuthStore, CONSENT_PURPOSES, ACCOUNT_BLOCKING_PURPOSES, isConsentActive,
-  type ConsentPurpose,
+  CONSENT_PURPOSES,
 } from '@/store/useAuthStore';
 import { useNumeraStore } from '@/store/useNumeraStore';
+import { useStudentProfile } from '@/hooks/useStudentProfile';
+import type { AgeBand, GradeBand, PreferredMode, StudentProfile, StudentProfilePatch } from '@/lib/studentProfile';
 import { PHASE_ORDER, PHASE_META } from '@/lib/phases';
 
 /* ── Small primitives, local to this page ──────────────────────── */
@@ -140,53 +141,6 @@ const PHASE_ICON = {
   review:      RotateCcw,
 } as const;
 
-const AVATAR_PX = 256;
-const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
-
-/**
- * Read an image file and return a square, downscaled data URL.
- *
- * Centre-cropped to a square first, so a portrait photo does not arrive
- * stretched, then drawn at 256px. The store persists to localStorage and the
- * quota is ~5MB shared with everything else the app keeps there — putting the
- * original file in would evict the auth token along with it.
- */
-function readSquareAvatar(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    if (!file.type.startsWith('image/')) {
-      reject(new Error('That file is not an image.'));
-      return;
-    }
-    if (file.size > MAX_UPLOAD_BYTES) {
-      reject(new Error('That image is larger than 8MB. Try a smaller one.'));
-      return;
-    }
-
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const side = Math.min(img.width, img.height);
-      const canvas = document.createElement('canvas');
-      canvas.width = AVATAR_PX;
-      canvas.height = AVATAR_PX;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) { reject(new Error('Could not process that image.')); return; }
-      ctx.drawImage(
-        img,
-        (img.width - side) / 2, (img.height - side) / 2, side, side,
-        0, 0, AVATAR_PX, AVATAR_PX,
-      );
-      resolve(canvas.toDataURL('image/jpeg', 0.85));
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error('That image could not be opened.'));
-    };
-    img.src = url;
-  });
-}
-
 /**
  * The status chip sits on the navy identity card, so the tone is a dot colour,
  * not a text colour. Tinted text (sage on navy) failed contrast badly enough to
@@ -203,26 +157,114 @@ const ACCOUNT_STATUS_COPY: Record<string, { label: string; dot: string }> = {
   deleted:               { label: 'Deleted',           dot: 'bg-muted-gray' },
 };
 
+const AGE_BANDS: AgeBand[] = ['11–14 (KS3)', '14–16 (KS4)'];
+const GRADES: GradeBand[] = ['Year 7', 'Year 8', 'Year 9', 'Year 10', 'Year 11'];
+const MODES: PreferredMode[] = ['voice', 'text', 'balanced'];
+const INPUT_CLASS = 'mt-1 w-full rounded-lg border border-muted-gray bg-white px-3 py-2 text-sm text-ink disabled:opacity-60';
+
+function ProfileEditor({ profile, saving, save }: {
+  profile: StudentProfile;
+  saving: boolean;
+  save: (changes: StudentProfilePatch) => Promise<StudentProfile>;
+}): ReactElement {
+  const [name, setName] = useState(profile.display_name ?? '');
+  const [age, setAge] = useState<AgeBand | ''>(profile.age_band ?? '');
+  const [grade, setGrade] = useState<GradeBand | ''>(profile.grade_band ?? '');
+  const [mode, setMode] = useState<PreferredMode | ''>(profile.preferred_mode ?? '');
+  const [inputMode, setInputMode] = useState<'voice' | 'text' | ''>(profile.preferences.input_mode ?? '');
+  const [panelSide, setPanelSide] = useState<'left' | 'right' | ''>(profile.preferences.panel_side ?? '');
+  const [message, setMessage] = useState<string | null>(null);
+
+  const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault();
+    setMessage(null);
+    const preferences = {
+      ...(inputMode && inputMode !== profile.preferences.input_mode ? { input_mode: inputMode } : {}),
+      ...(panelSide && panelSide !== profile.preferences.panel_side ? { panel_side: panelSide } : {}),
+    };
+    const changes: StudentProfilePatch = {
+      ...(name.trim() !== (profile.display_name ?? '') ? { display_name: name.trim() } : {}),
+      ...(age && age !== profile.age_band ? { age_band: age } : {}),
+      ...((grade || null) !== profile.grade_band ? { grade_band: grade || null } : {}),
+      ...(mode && mode !== profile.preferred_mode ? { preferred_mode: mode } : {}),
+      ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
+    };
+    if (Object.keys(changes).length === 0) { setMessage('No changes to save.'); return; }
+    try {
+      const saved = await save(changes);
+      setName(saved.display_name ?? '');
+      setAge(saved.age_band ?? '');
+      setGrade(saved.grade_band ?? '');
+      setMode(saved.preferred_mode ?? '');
+      setInputMode(saved.preferences.input_mode ?? '');
+      setPanelSide(saved.preferences.panel_side ?? '');
+      setMessage('Profile saved.');
+    } catch {
+      // useStudentProfile presents the error and retains the confirmed profile.
+      setMessage(null);
+    }
+  };
+
+  return <form onSubmit={(event) => { void submit(event); }}>
+    <fieldset disabled={saving} className="grid gap-4 sm:grid-cols-2">
+      <legend className="sr-only">Edit your profile</legend>
+      <label className="text-sm text-slate-blue">Display name
+        <input name="display_name" value={name} maxLength={100} required className={INPUT_CLASS}
+          onChange={(event) => setName(event.target.value)} autoComplete="name" />
+      </label>
+      <label className="text-sm text-slate-blue">Age band
+        <select name="age_band" value={age} className={INPUT_CLASS} onChange={(event) => setAge(event.target.value as AgeBand | '')}>
+          <option value="" disabled>Not set</option>{AGE_BANDS.map((value) => <option key={value}>{value}</option>)}
+        </select>
+      </label>
+      <label className="text-sm text-slate-blue">Year group
+        <select name="grade_band" value={grade} className={INPUT_CLASS} onChange={(event) => setGrade(event.target.value as GradeBand | '')}>
+          <option value="">Not set</option>{GRADES.map((value) => <option key={value}>{value}</option>)}
+        </select>
+      </label>
+      <label className="text-sm text-slate-blue">Preferred mode
+        <select name="preferred_mode" value={mode} className={INPUT_CLASS} onChange={(event) => setMode(event.target.value as PreferredMode | '')}>
+          <option value="" disabled>Not set</option>{MODES.map((value) => <option key={value}>{value}</option>)}
+        </select>
+      </label>
+      <label className="text-sm text-slate-blue">Tutor input
+        <select name="input_mode" value={inputMode} className={INPUT_CLASS} onChange={(event) => setInputMode(event.target.value as 'voice' | 'text' | '')}>
+          <option value="" disabled>Not set</option><option value="voice">Voice</option><option value="text">Text</option>
+        </select>
+      </label>
+      <label className="text-sm text-slate-blue">Tutor panel side
+        <select name="panel_side" value={panelSide} className={INPUT_CLASS} onChange={(event) => setPanelSide(event.target.value as 'left' | 'right' | '')}>
+          <option value="" disabled>Not set</option><option value="left">Left</option><option value="right">Right</option>
+        </select>
+      </label>
+    </fieldset>
+    <button type="submit" disabled={saving} className="mt-5 rounded-xl bg-focus-navy px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60">
+      {saving ? 'Saving…' : 'Save profile'}
+    </button>
+    {message && <p role="status" className="mt-3 text-sm text-slate-blue">{message}</p>}
+  </form>;
+}
+
 export default function ProfilePage() {
+  const { profile, loading, saving, error, reload, save } = useStudentProfile();
   const { signOut, signingOut, overlay } = useSignOut();
-
-  const student = useAuthStore((s) => s.student);
-  const guardian = useAuthStore((s) => s.guardian);
-  const email = useAuthStore((s) => s.email);
-  const tier = useAuthStore((s) => s.tier);
-  const studentCode = useAuthStore((s) => s.studentCode);
-  const accountStatus = useAuthStore((s) => s.accountStatus);
-  const consents = useAuthStore((s) => s.consents);
-  const setStudentProfile = useAuthStore((s) => s.setStudentProfile);
-  const grantConsent = useAuthStore((s) => s.grantConsent);
-  const withdrawConsent = useAuthStore((s) => s.withdrawConsent);
-
-  const phasesDone = useNumeraStore((s) => s.phasesDone);
-  const panelSide = useNumeraStore((s) => s.panelSide);
-  const setPanelSide = useNumeraStore((s) => s.setPanelSide);
-  const inputMode = useNumeraStore((s) => s.inputMode);
-  const setInputMode = useNumeraStore((s) => s.setInputMode);
-
+  const phasesDone = useNumeraStore((state) => state.phasesDone);
+  if (!profile) return (
+    <PageShell title="Your profile" subtitle="Your account, how you learn, and what you have agreed to." wide>
+      {overlay}
+      {loading && <p role="status">Loading your profile…</p>}
+      {error && <p role="alert">{error} <button onClick={reload} className="underline">Retry</button></p>}
+      <button onClick={signOut} disabled={signingOut} className="mt-4 underline">Log out</button>
+    </PageShell>
+  );
+  const student = {
+    name: profile.display_name, avatar: profile.avatar_url,
+    ageBand: profile.age_band, gradeBand: profile.grade_band, preferredMode: profile.preferred_mode,
+  };
+  const email = profile.email;
+  const tier = profile.tier;
+  const studentCode = profile.student_code;
+  const accountStatus = profile.account_status;
   const initials =
     (student.name || email || 'N')
       .split(/[\s@._]/)
@@ -234,40 +276,10 @@ export default function ProfilePage() {
   const done = PHASE_ORDER.filter((p) => phasesDone.includes(p)).length;
   const pct = Math.round((done / PHASE_ORDER.length) * 100);
 
-  const activeConsents = CONSENT_PURPOSES.filter((p) => isConsentActive(consents, p.id)).length;
-  const status = ACCOUNT_STATUS_COPY[accountStatus] ?? {
-    label: accountStatus,
-    dot: 'bg-muted-gray',
-  };
-
-  const toggleConsent = (id: ConsentPurpose) =>
-    isConsentActive(consents, id) ? withdrawConsent(id) : grantConsent(id);
-
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [avatarError, setAvatarError] = useState<string | null>(null);
-
-  const pickAvatar = async (file: File | undefined) => {
-    if (!file) return;
-    setAvatarError(null);
-    try {
-      setStudentProfile({ avatar: await readSquareAvatar(file) });
-    } catch (e) {
-      // Surfaced on the card. A silent failure here reads as "upload is
-      // broken" when the real cause is a HEIC file or a 40MB photo.
-      setAvatarError(e instanceof Error ? e.message : 'Could not use that image.');
-    }
-  };
-
-
-  /* How much of the profile the student has actually filled in. Honest: it
-     counts fields that exist, so it drops to 0% on a fresh account rather than
-     showing a flattering number nobody earned. */
-  const fields = [
-    student.name, student.avatar, student.gradeBand, student.ageBand,
-    email, guardian.name, guardian.email, guardian.verified ? 'y' : '',
-  ];
-  const filled = fields.filter(Boolean).length;
-  const setupPct = Math.round((filled / fields.length) * 100);
+  const activeConsents = profile.consents?.filter((record) => record.accepted_at && !record.withdrawn_at).length;
+  const status = ACCOUNT_STATUS_COPY[accountStatus];
+  const fields = [student.name, student.avatar, student.gradeBand, student.ageBand, email];
+  const setupPct = Math.round(fields.filter(Boolean).length / fields.length * 100);
 
   return (
     <PageShell
@@ -276,6 +288,7 @@ export default function ProfilePage() {
       wide
     >
       {overlay}
+      {error && <p role="alert" className="mb-4 text-action-orange">{error}</p>}
 
       <div style={{ '--profile-accent': GREEN } as React.CSSProperties}>
 
@@ -307,8 +320,8 @@ export default function ProfilePage() {
           </div>
 
           <div className="flex items-start gap-8">
-            <Stat value={done} sub={`of ${PHASE_ORDER.length}`} label="Phases" />
-            <Stat value={activeConsents} sub={`of ${CONSENT_PURPOSES.length}`} label="Permissions" />
+            <Stat value={done} sub={`of ${PHASE_ORDER.length}`} label="Phases on this device" />
+            <Stat value={activeConsents ?? "Not set"} label="Permissions" />
             <Stat value={`${setupPct}%`} label="Profile set up" />
           </div>
         </div>
@@ -335,56 +348,10 @@ export default function ProfilePage() {
               <div className="absolute inset-0" style={{ background: GREEN }} aria-hidden="true" />
             )}
 
-            {/* A real <label for> rather than a button calling input.click().
-                The button sat at the same z-index as the name plate below it,
-                so the plate — later in the DOM — swallowed the clicks and
-                "Add a photo" did nothing. A label needs no JS at all. */}
-            <input
-              ref={fileRef}
-              id="avatar-input"
-              type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif"
-              className="sr-only"
-              onChange={(e) => { void pickAvatar(e.target.files?.[0]); e.target.value = ''; }}
-            />
-
-            <label
-              htmlFor="avatar-input"
-              title={student.avatar ? 'Change photo' : 'Add a photo'}
-              className={cn(
-                'group z-30 cursor-pointer text-white',
-                student.avatar
-                  ? 'absolute top-3 right-3 w-9 h-9 rounded-full bg-black/45 hover:bg-black/70 backdrop-blur-sm flex items-center justify-center transition-colors'
-                  : 'absolute inset-0 flex flex-col items-center justify-center gap-3',
-              )}
-            >
-              {student.avatar ? (
-                <Camera size={16} strokeWidth={1.9} />
-              ) : (
-                <>
-                  <span
-                    className="w-16 h-16 rounded-full flex items-center justify-center transition-colors"
-                    style={{ background: 'rgba(0,0,0,0.10)', border: '1px solid rgba(0,0,0,0.18)', color: ON_GREEN }}
-                  >
-                    <Camera size={24} strokeWidth={1.6} />
-                  </span>
-                  <span className="text-[12.5px] font-semibold tracking-[0.3px]" style={{ color: ON_GREEN }}>
-                    Add a photo
-                  </span>
-                </>
-              )}
-            </label>
-
-            {student.avatar && (
-              <button
-                type="button"
-                onClick={() => { setStudentProfile({ avatar: null }); setAvatarError(null); }}
-                aria-label="Remove profile photo"
-                className="absolute top-3 right-14 z-30 w-9 h-9 rounded-full bg-black/45 hover:bg-action-orange backdrop-blur-sm text-white flex items-center justify-center transition-colors"
-              >
-                <Trash2 size={15} strokeWidth={1.9} />
-              </button>
-            )}
+            <div className="relative z-20 flex flex-1 flex-col items-center justify-center gap-3 p-5">
+              {!student.avatar && <span className="text-3xl font-semibold" style={{ color: ON_GREEN }}>{initials}</span>}
+              <span className="rounded-lg bg-white/90 px-3 py-2 text-xs text-ink">Photo changes are not available yet.</span>
+            </div>
 
             {/* Name plate, over the scrim. */}
             {/* Name plate. pointer-events-none so it cannot steal the click
@@ -404,11 +371,7 @@ export default function ProfilePage() {
               </div>
             </div>
 
-            {avatarError && (
-              <p role="alert" className="absolute bottom-20 left-4 right-4 z-20 text-[11px] text-white bg-action-orange rounded-lg px-2.5 py-1.5 text-center leading-snug">
-                {avatarError}
-              </p>
-            )}
+
           </div>
 
           {/* Progress — the reference's bar chart. One bar per phase; a full
@@ -417,7 +380,7 @@ export default function ProfilePage() {
             <div className="flex items-start justify-between">
               <div>
                 <div className="text-[16px] font-semibold text-ink">Progress</div>
-                <div className="text-[11.5px] text-slate-blue mt-0.5">Through this topic</div>
+                <div className="text-[11.5px] text-slate-blue mt-0.5">Through this topic · on this device</div>
               </div>
               <span
                 className="rounded-full px-2.5 py-1 text-[11px] font-semibold"
@@ -493,7 +456,7 @@ export default function ProfilePage() {
             style={{ background: GREEN, color: ON_GREEN }}
           >
             <div className="flex items-start justify-between">
-              <div className="text-[15px] font-semibold">Learning flow</div>
+              <div className="text-[15px] font-semibold">Learning flow · on this device</div>
               <div className="text-[15px] font-semibold tabular-nums">
                 {done}<span className="opacity-50">/{PHASE_ORDER.length}</span>
               </div>
@@ -544,22 +507,17 @@ export default function ProfilePage() {
 
           {/* Accordions — the reference's left-hand disclosure stack. */}
           <div className="xl:col-span-3 space-y-3">
-            <Disclosure
-              title="Guardian"
-              meta={
-                guardian.verified ? (
-                  <span className="flex items-center gap-1.5 text-[11px] font-semibold text-success-sage">
-                    <ShieldCheck size={13} strokeWidth={2} /> Verified
-                  </span>
-                ) : (
-                  <span className="text-[11px] font-semibold text-action-orange">Unverified</span>
-                )
-              }
-            >
-              <Field label="Name" value={guardian.name || <Unknown>Not set</Unknown>} />
-              <Field label="Relationship" value={guardian.relationship || <Unknown>Not set</Unknown>} />
-              <Field label="Email" value={guardian.email || <Unknown>Not set</Unknown>} />
-              <Field label="Phone" value={guardian.phone || <Unknown>Not set</Unknown>} />
+            <Disclosure title="Guardians" defaultOpen={true}>
+              {profile.guardians.length === 0 ? <p className="text-sm text-slate-blue">No guardian linked to your account.</p> : profile.guardians.map((guardian) => (
+                <div key={guardian.guardian_id} className="mb-4 last:mb-0">
+                  <Field label="Name" value={guardian.name || <Unknown>Not set</Unknown>} />
+                  <Field label="Relationship" value={guardian.relationship || <Unknown>Not set</Unknown>} />
+                  <Field label="Email" value={guardian.email || <Unknown>Not set</Unknown>} />
+                  <Field label="Phone" value={guardian.phone || <Unknown>Not set</Unknown>} />
+                  <Field label="Identity verified" value={guardian.verified === null ? <Unknown>Not set</Unknown> : guardian.verified ? 'Verified' : 'Not verified'} />
+                </div>
+              ))}
+              <p className="mt-3 text-xs text-slate-blue">Guardian details are read-only.</p>
             </Disclosure>
 
             <Disclosure title="Account">
@@ -569,58 +527,13 @@ export default function ProfilePage() {
               <Field label="Age band" value={student.ageBand || <Unknown>Not set</Unknown>} />
             </Disclosure>
 
-            <Disclosure
-              title="Privacy & permissions"
-              meta={
-                <span className="text-[11px] text-slate-blue tabular-nums">
-                  {activeConsents}/{CONSENT_PURPOSES.length}
-                </span>
-              }
-            >
-              <p className="text-[12px] text-slate-blue leading-relaxed pt-3 pb-1">
-                Turning off a <strong className="font-semibold text-ink">Required</strong> permission
-                restricts the whole account until you turn it back on. The other
-                two only disable their own feature.
-              </p>
-              <div className="mt-2 divide-y divide-muted-gray/60">
-                {CONSENT_PURPOSES.map((p) => {
-                  const on = isConsentActive(consents, p.id);
-                  const blocking = ACCOUNT_BLOCKING_PURPOSES.includes(p.id);
-                  return (
-                    <div key={p.id} className="py-3 flex items-start justify-between gap-4">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-[13px] font-medium text-ink">{p.label}</span>
-                          {blocking && (
-                            <span className="rounded-full bg-reading-surface text-slate-blue px-2 py-0.5 text-[9.5px] font-semibold tracking-[0.4px] uppercase">
-                              Required
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-[11.5px] text-slate-blue mt-0.5 leading-snug">{p.detail}</p>
-                      </div>
-                      <button
-                        onClick={() => toggleConsent(p.id)}
-                        role="switch"
-                        aria-checked={on}
-                        aria-label={p.label}
-                        className={cn(
-                          'flex-shrink-0 w-11 h-6 rounded-full relative transition-colors',
-                          !on && 'bg-muted-gray',
-                        )}
-                        style={on ? { background: GREEN } : undefined}
-                      >
-                        <span
-                          className={cn(
-                            'absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all',
-                            on ? 'left-[22px]' : 'left-0.5',
-                          )}
-                        />
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
+            <Disclosure title="Privacy & permissions" defaultOpen={true}>
+              <p className="py-3 text-xs text-slate-blue">Permissions are read-only. Consent changes are not available in this release.</p>
+              {CONSENT_PURPOSES.map((purpose) => {
+                const consent = profile.consents?.find((record) => record.purpose === purpose.id);
+                const value = !consent ? 'Not set' : consent.withdrawn_at ? 'Withdrawn' : consent.accepted_at ? 'Granted' : 'Not granted';
+                return <Field key={purpose.id} label={purpose.label} value={value} />;
+              })}
             </Disclosure>
           </div>
 
@@ -638,25 +551,8 @@ export default function ProfilePage() {
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 mt-6">
-              <PrefGroup
-                label="Tutor input"
-                options={[
-                  { id: 'voice', label: 'Voice', icon: Mic },
-                  { id: 'text',  label: 'Text',  icon: Type },
-                ]}
-                value={inputMode}
-                onPick={(v) => setInputMode(v as 'voice' | 'text')}
-              />
-              <PrefGroup
-                label="Tutor panel side"
-                options={[
-                  { id: 'left',  label: 'Left',  icon: PanelLeft },
-                  { id: 'right', label: 'Right', icon: PanelRight },
-                ]}
-                value={panelSide}
-                onPick={(v) => setPanelSide(v as 'left' | 'right')}
-              />
+            <div className="mt-6">
+              <ProfileEditor key={profile.student_id} profile={profile} saving={saving} save={save} />
             </div>
 
             {/* Log out lives at the bottom of the profile, not in the dock. */}
@@ -696,41 +592,6 @@ function Stat({ value, sub, label }: { value: React.ReactNode; sub?: string; lab
         {sub && <span className="text-[16px] text-slate-blue ml-1">{sub}</span>}
       </div>
       <div className="text-[11px] text-slate-blue mt-2">{label}</div>
-    </div>
-  );
-}
-
-/** A pair of pill buttons bound to a store value. */
-function PrefGroup({
-  label, options, value, onPick,
-}: {
-  label: string;
-  options: { id: string; label: string; icon: typeof Mic }[];
-  value: string;
-  onPick: (id: string) => void;
-}) {
-  return (
-    <div>
-      <div className="text-[11.5px] text-slate-blue mb-2">{label}</div>
-      <div className="flex gap-2">
-        {options.map(({ id, label: l, icon: Icon }) => {
-          const on = value === id;
-          return (
-            <button
-              key={id}
-              onClick={() => onPick(id)}
-              aria-pressed={on}
-              className={cn(
-                'flex items-center gap-2 rounded-xl px-3.5 py-2.5 text-[13px] font-medium transition-colors',
-                !on && 'bg-reading-surface text-slate-blue hover:text-ink',
-              )}
-              style={on ? { background: GREEN, color: ON_GREEN } : undefined}
-            >
-              <Icon size={15} strokeWidth={1.9} /> {l}
-            </button>
-          );
-        })}
-      </div>
     </div>
   );
 }

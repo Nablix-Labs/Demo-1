@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import jwt
 from pydantic import ValidationError
 
-from app.adapters.http_utils import get_bytes, post_json
+from app.adapters.http_utils import get_bytes, post_json, request_json
 from app.core.config import Settings
 from app.core.logger import logger
 from app.core.exceptions import (
@@ -21,6 +21,7 @@ from app.models.student_model_session import (
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
 )
+from app.models.student_profile import StudentProfile, StudentProfilePatch
 from app.models.topic_event_history import TopicEventHistoryResponse
 from app.models.work_artifact import (
     Phase4ReviewPersistRequest,
@@ -165,6 +166,38 @@ class StudentModelServiceAdapter:
             },
         )
         return parsed
+
+    async def fetch_student_profile(self, access_token: str) -> StudentProfile:
+        """Forward the student token; Student Model resolves its owner."""
+        url = self._require_student_model_url("student profile")
+        response = await request_json(
+            "GET", "student_model", f"{url}/students/me/profile", None,
+            {"Authorization": f"Bearer {access_token}"},
+            self._settings.adapter_request_timeout_seconds,
+            self._settings.adapter_request_retry_count,
+        )
+        return self.parse_student_profile(response)
+
+    async def update_student_profile(
+        self, changes: StudentProfilePatch, access_token: str,
+    ) -> StudentProfile:
+        """Forward only supplied editable fields, without a student identifier."""
+        url = self._require_student_model_url("student profile")
+        response = await request_json(
+            "PATCH", "student_model", f"{url}/students/me/profile",
+            changes.model_dump(mode="json", exclude_unset=True),
+            {"Authorization": f"Bearer {access_token}"},
+            self._settings.adapter_request_timeout_seconds,
+            self._settings.adapter_request_retry_count,
+        )
+        return self.parse_student_profile(response)
+
+    def parse_student_profile(self, response: dict[str, object]) -> StudentProfile:
+        """Reject incomplete upstream profiles rather than inventing values."""
+        try:
+            return StudentProfile.model_validate(response)
+        except ValidationError as error:
+            raise AdapterError("student_model", f"Invalid profile response body={response}: {error}") from error
 
     async def persist_work_artifact(
         self,

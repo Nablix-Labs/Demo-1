@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api import ai_engine, canvas, health, interaction, session, voice, work_artifacts
+from app.api import ai_engine, canvas, health, interaction, session, student_profile, voice, work_artifacts
 from app.ai_engine.prompt_registry import load_prompt_registry
 from app.core.config import get_settings
 from app.core.logger import logger
@@ -58,6 +58,7 @@ app.add_middleware(
 )
 
 # Registering API routes
+app.include_router(student_profile.router)
 app.include_router(health.router, tags=["Health"])
 app.include_router(ai_engine.router, prefix="/ai-engine", tags=["AI Engine"])
 app.include_router(session.router, prefix="/session", tags=["Session"])

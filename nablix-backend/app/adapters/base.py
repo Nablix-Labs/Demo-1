@@ -27,6 +27,7 @@ from app.models.adapters import (
     VisionOCRResult,
     VoiceResult,
 )
+from app.models.student_profile import StudentProfile, StudentProfilePatch
 from app.models.student_model_session import (
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
@@ -36,6 +37,10 @@ from app.models.student_model_session import (
 class StudentModelAdapter(Protocol):
     """Reads and updates the learner-state estimate for a session."""
 
+    async def fetch_student_profile(self, access_token: str) -> StudentProfile: ...
+    async def update_student_profile(
+        self, changes: StudentProfilePatch, access_token: str,
+    ) -> StudentProfile: ...
     async def call(self, request: AdapterContext) -> StudentModelResult: ...
     def parse_response(self, response: dict[str, object]) -> StudentModelResult: ...
     def handle_error(self, error: AdapterError) -> NoReturn: ...

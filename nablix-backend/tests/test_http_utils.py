@@ -25,8 +25,9 @@ def test_post_json_does_not_retry_rejected_requests(monkeypatch: pytest.MonkeyPa
         async def __aexit__(self, *args: object) -> None:
             return None
 
-        async def post(
+        async def request(
             self,
+            method: str,
             url: str,
             json: dict[str, object],
             headers: dict[str, str],
