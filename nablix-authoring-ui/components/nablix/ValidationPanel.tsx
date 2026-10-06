@@ -24,7 +24,7 @@ export function ValidationPanel({
   const warnings = issues.filter((i) => !i.blocking);
 
   return (
-    <div className="lg-scroll flex h-full flex-col gap-4 overflow-y-auto p-4">
+    <div className="lg-scroll flex h-full flex-col gap-3 overflow-y-auto p-3">
       {counts && (
         <section>
           <h3 className="mb-2 px-1 text-2xs font-bold uppercase tracking-wide text-slate-blue">Content</h3>
@@ -32,9 +32,9 @@ export function ValidationPanel({
             {Object.entries(counts).map(([label, value]) => (
               <div
                 key={label}
-                className="flex items-center justify-between rounded-lg border border-muted-gray/60 bg-reading-surface px-3 py-2"
+                className="flex items-center justify-between rounded-lg border border-muted-gray/60 bg-reading-surface px-2.5 py-1.5"
               >
-                <span className="text-[13px] font-medium capitalize text-ink/85">{label.replace(/_/g, ' ')}</span>
+                <span className="text-[12px] font-medium capitalize text-ink/85">{label.replace(/_/g, ' ')}</span>
                 <span className="text-2xs font-bold tabular-nums text-slate-blue">{value}</span>
               </div>
             ))}

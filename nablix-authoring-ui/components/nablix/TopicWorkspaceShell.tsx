@@ -1,7 +1,7 @@
 'use client';
 
 import { useTopicId } from '@/lib/useTopicId';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ShieldCheck } from 'lucide-react';
@@ -19,6 +19,7 @@ export function TopicWorkspaceShell({ children }: { children: React.ReactNode })
   const pathname = usePathname();
   const [ws, setWs] = useState<TopicDetailsData | null>(null);
   const [coverage, setCoverage] = useState<CoverageData | null>(null);
+  const [panelWidth, startPanelDrag] = useDraggableWidth();
 
   useEffect(() => {
     let alive = true;
@@ -70,7 +71,10 @@ export function TopicWorkspaceShell({ children }: { children: React.ReactNode })
       {/* Three-pane frame — contained horizontal scroll on very narrow windows
           so the editor never crushes (spec §17 targets laptop widths). */}
       <div className="lg-scroll relative z-10 min-h-0 flex-1 overflow-x-auto px-4 pb-4">
-      <div className="grid h-full min-w-[1000px] grid-cols-[240px_minmax(0,1fr)_300px] gap-3 xl:grid-cols-[260px_minmax(0,1fr)_320px]">
+      <div
+        className="grid h-full min-w-[1000px] gap-3"
+        style={{ gridTemplateColumns: `240px minmax(0,1fr) ${panelWidth}px` }}
+      >
         {/* Left — hierarchy tree */}
         <div className="lg-glass flex min-h-0 flex-col rounded-card">
           <div className="flex items-center justify-between px-4 py-3">
@@ -102,7 +106,19 @@ export function TopicWorkspaceShell({ children }: { children: React.ReactNode })
         </div>
 
         {/* Right — validation / coverage */}
-        <div className="lg-glass min-h-0 rounded-card">
+        <div className="lg-glass relative min-h-0 rounded-card">
+          {/* Drag the left edge to resize; the width is remembered. */}
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize panel"
+            title="Drag to resize"
+            onPointerDown={startPanelDrag}
+            style={{ touchAction: 'none' }}
+            className="group absolute -left-2.5 top-0 z-10 flex h-full w-3 cursor-col-resize select-none items-center justify-center"
+          >
+            <span className="h-10 w-1 bg-muted-gray transition-colors group-hover:bg-learning-blue" />
+          </div>
           {ws ? (
             <ValidationPanel
               counts={ws.hierarchy_counts}
@@ -155,4 +171,56 @@ function coverageGapIssues(coverage: CoverageData | null): ValidationIssue[] {
         navigate_to: { page_id: 'COVERAGE_VALIDATION' },
       })),
   );
+}
+
+const PANEL_KEY = 'nbx-workspace-panel-width';
+const PANEL_DEFAULT = 220;
+const PANEL_MIN = 170;
+const PANEL_MAX = 440;
+
+/**
+ * Width of the right-hand panel, dragged from its left edge. Starts compact —
+ * at 300px it took a third of the screen from the content (Manav, 6 Oct) — and
+ * remembers what the approver chose.
+ */
+function useDraggableWidth(): [number, (e: React.PointerEvent) => void] {
+  const [width, setWidth] = useState(PANEL_DEFAULT);
+
+  useEffect(() => {
+    try {
+      const saved = Number(localStorage.getItem(PANEL_KEY));
+      if (saved >= PANEL_MIN && saved <= PANEL_MAX) setWidth(saved);
+    } catch {
+      /* storage unavailable: keep the default */
+    }
+  }, []);
+
+  const start = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = width;
+    let latest = startWidth;
+    const move = (ev: PointerEvent) => {
+      latest = Math.min(PANEL_MAX, Math.max(PANEL_MIN, startWidth + (startX - ev.clientX)));
+      setWidth(latest);
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      try {
+        localStorage.setItem(PANEL_KEY, String(latest));
+      } catch {
+        /* not remembered, still resized */
+      }
+    };
+    // No text selection while dragging across the page.
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }, [width]);
+
+  return [width, start];
 }
