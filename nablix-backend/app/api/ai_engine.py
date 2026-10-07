@@ -1,8 +1,10 @@
 import asyncio
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
+from app.ai_engine.teach_back import generate_teach_back_reply
 from app.ai_engine.classifier import ClassificationRequest, classify_student_response
 from app.ai_engine.phase4_review import Phase4ReviewValidationError, generate_phase4_review
 from app.core.exceptions import AdapterError
@@ -16,6 +18,7 @@ from app.ai_engine.schemas import (
 from app.models.adapters import ConversationMessage, ConversationState, Phase2PromptContext
 from app.models.student_model_session import AnswerSpec, QuestionType
 from app.models.phase4_review import Phase4ReviewRequest, Phase4ReviewResponse
+from app.models.teach_back import TeachBackPayload, TeachBackReply
 
 
 router = APIRouter()
@@ -60,6 +63,8 @@ class AiEngineClassifyRequest(BaseModel):
             normalized_data["question"] = normalized_data["question_context"]
         if "correct_answer" not in normalized_data and "expected_answer" in normalized_data:
             normalized_data["correct_answer"] = normalized_data["expected_answer"]
+        if normalized_data.get("current_phase") == "TEACH_BACK":
+            raise ValueError("Use /teach-back/respond for conceptual Teach-Back turns.")
         return normalized_data
 
 
@@ -116,3 +121,19 @@ async def generate_phase4_review_endpoint(
         raise
     except Phase4ReviewValidationError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+class AiEngineTeachBackRequest(BaseModel):
+    content: TeachBackPayload
+    student_input: str
+    input_source: Literal["TEXT", "VOICE"]
+    transcript_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    conversation_history: list[ConversationMessage] = Field(default_factory=list)
+
+
+@router.post("/teach-back/respond", response_model=TeachBackReply)
+async def respond_to_teach_back(request: AiEngineTeachBackRequest) -> TeachBackReply:
+    return await asyncio.to_thread(
+        generate_teach_back_reply, request.content, request.student_input,
+        request.input_source, request.transcript_confidence, request.conversation_history,
+    )

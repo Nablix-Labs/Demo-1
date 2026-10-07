@@ -356,8 +356,11 @@ After new concept (Phase 1) or major sub-concept (Phase 2):
 ask student to explain in own words before moving on.
 Partial teach-back capturing the core idea = success.
 First failure: re-explain once with different analogy.
-Second failure: [TEACHBACK_DOUBLE_FAIL] — backend routes
-to prerequisite repair.
+In the dedicated TEACH_BACK phase, the backend counts incorrect explanations.
+First failure: briefly clarify and request one re-explanation.
+Second failure: return to Phase 1 Concept Orientation for the unresolved skill.
+Questions and unclear input are not failures. Preserve understood skills.
+For Phase 2 sub-concepts, follow the backend-provided repair route.
 Phase 2: teach-back only after major sub-concepts whose
 misunderstanding would invalidate the next 5 minutes of work.
 Not after every turn.

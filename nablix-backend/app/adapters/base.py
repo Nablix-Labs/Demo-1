@@ -18,8 +18,10 @@ changes.
 from typing import NoReturn, Protocol
 
 from app.core.exceptions import AdapterError
+from app.models.teach_back import TeachBackPayload, TeachBackReply
 from app.models.adapters import (
     AdapterContext,
+    ConversationMessage,
     SafetyCheckResult,
     StudentModelResult,
     TutorEngineRequest,
@@ -50,6 +52,10 @@ class StudentModelAdapter(Protocol):
 class TutorEngineAdapter(Protocol):
     """Produces tutoring feedback from context and student state."""
 
+    async def respond_to_teach_back(
+        self, content: TeachBackPayload, student_input: str, input_source: str,
+        transcript_confidence: float | None, history: list[ConversationMessage],
+    ) -> TeachBackReply: ...
     async def call(self, request: TutorEngineRequest) -> TutorResult: ...
     def parse_response(self, response: dict[str, object]) -> TutorResult: ...
     def handle_error(self, error: AdapterError) -> NoReturn: ...
