@@ -79,6 +79,7 @@ IndependentOutcome = Literal[
 LearningPhase = Literal[
     "DIAGNOSTIC",
     "CONCEPT_ORIENTATION",
+    "TEACH_BACK",
     "GUIDED_PRACTICE",
     "INDEPENDENT_PRACTICE",
     "REVIEW",

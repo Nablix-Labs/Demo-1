@@ -5,12 +5,14 @@ student context and student-model state, then returns the frontend-facing
 tutoring decision fields.
 """
 
+import asyncio
 from typing import cast
 
 from app.ai_engine.classifier import (
     ClassificationRequest,
     classify_student_response,
 )
+from app.ai_engine.teach_back import generate_teach_back_reply
 from app.ai_engine.schemas import (
     CanvasTextRegion,
     HintLevel,
@@ -19,8 +21,11 @@ from app.ai_engine.schemas import (
     TutorResponse,
 )
 from app.core.config import Settings
+from app.core.exceptions import AdapterError
+from app.models.teach_back import TeachBackPayload, TeachBackReply
 from app.models.adapters import (
     AdapterContext,
+    ConversationMessage,
     AnnotationIntent,
     CanvasFeedback,
     CanvasStepFeedback,
@@ -84,10 +89,25 @@ class TutorEngineServiceAdapter:
     async def call(self, request: TutorEngineRequest) -> TutorResult:
         return self._respond(request)
 
+    async def respond_to_teach_back(
+        self,
+        content: TeachBackPayload,
+        student_input: str,
+        input_source: str,
+        transcript_confidence: float | None,
+        history: list[ConversationMessage],
+    ) -> TeachBackReply:
+        return await asyncio.to_thread(
+            generate_teach_back_reply, content, student_input, input_source,
+            transcript_confidence, history,
+        )
+
     def _respond(self, request: TutorEngineRequest) -> TutorResult:
         """Return AI Engine feedback when context has a question, else canned data."""
 
         context = request.context
+        if context.current_phase == "TEACH_BACK":
+            raise AdapterError("tutor_engine", "Teach-Back must use respond_to_teach_back with conceptual context.")
         if context.question is not None and context.correct_answer is not None:
             ai_response = classify_student_response(
                 ClassificationRequest(

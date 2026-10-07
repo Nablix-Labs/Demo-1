@@ -19,6 +19,7 @@ else:
 PHASE_PROMPT_FILES: dict[str, str] = {
     "DIAGNOSTIC": "diagnostic.txt",
     "CONCEPT_ORIENTATION": "concept_orientation.txt",
+    "TEACH_BACK": "teach_back.txt",
     "GUIDED_PRACTICE": "guided_practice.txt",
     "INDEPENDENT_PRACTICE": "independent_practice.txt",
     "REVIEW": "review.txt",

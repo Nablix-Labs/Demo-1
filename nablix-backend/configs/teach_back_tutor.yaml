@@ -1,0 +1,11 @@
+max_failed_explanations: 2
+opening_message: "Your turn to be the teacher! What is the main idea behind {skill_name}, in your own words?"
+return_to_orientation_message: "Let's revisit this idea together, then you can teach it back to me."
+voice_clarification_message: "I didn't catch that clearly. Could you say the idea again?"
+acknowledgement_message: "Tell me the idea in your own words, as if I'm learning it from you."
+completion_message: "You've explained the ideas we needed. Let's use them in some problems."
+forbidden_student_text_patterns:
+  - "micro_skill"
+  - "error_code"
+  - "diagnostic result"
+  - "assessment label"

@@ -1121,6 +1121,17 @@ class OpenAIAIEngineClient:
                 f"invalid Explain Again response: {error}",
             ) from error
 
+    def generate_teach_back(
+        self,
+        context: dict[str, object],
+        schema: dict[str, object],
+        history: list[ConversationMessage],
+    ) -> dict[str, object]:
+        return self._request_json(
+            name="teach_back_conversation", schema=schema, phase="TEACH_BACK",
+            active_triggers=[], conversation_history=history, user_payload=context,
+        )
+
     def generate_phase4_review(
         self,
         context: dict[str, object],
