@@ -1,9 +1,9 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, computed_field, model_validator
 
-from app.models.teach_back import TeachBackPayload
+from app.models.teach_back import TeachBackPayload, TeachBackReply
 from app.models.adapters import (
     CanvasFeedback,
     ConversationMessage,
@@ -43,6 +43,8 @@ from app.models.guided_learning import (
     inactivity_policy,
 )
 from app.models.student_model_session import (
+    TeachBackTurnRecordedEvent,
+    TeachBackCompletedEvent,
     InterventionInputSubmittedEvent,
     GuidedRepairCompletedEvent,
     GuidedSupportEvent,
@@ -311,6 +313,20 @@ class FinalTurnReceipt(BaseModel):
     review_materialization_state: ReviewMaterializationState | None = None
 
 
+class PendingTeachBackOperation(BaseModel):
+    reply: TeachBackReply
+    evidence_fingerprint: str
+    turn_event: TeachBackTurnRecordedEvent
+    completion_event: TeachBackCompletedEvent | None = None
+    recorded: bool = False
+    original_phase: Phase
+
+
+class TeachBackReceipt(BaseModel):
+    evidence_fingerprint: str
+    response: dict[str, JsonValue]
+
+
 class SessionRecord(BaseModel):
     """Current mock session state stored by the in-memory registry."""
 
@@ -329,6 +345,8 @@ class SessionRecord(BaseModel):
     # re-sending THIS event -- never by deciding a fresh escalation against the
     # journey the first one already advanced.
     pending_support_event: GuidedSupportEvent | None = None
+    pending_teach_back: PendingTeachBackOperation | None = None
+    teach_back_receipts: dict[str, TeachBackReceipt] = Field(default_factory=dict)
     teach_back_content: TeachBackPayload | None = None
     orientation_visit_id: str | None = None
     journey_recovery_required: bool = False
@@ -461,6 +479,8 @@ class SessionRecord(BaseModel):
 
 
 class SessionResponse(SessionRecord):
+    pending_teach_back: PendingTeachBackOperation | None = Field(default=None, exclude=True)
+    teach_back_receipts: dict[str, TeachBackReceipt] = Field(default_factory=dict, exclude=True)
     teach_back_content: TeachBackPayload | None = Field(default=None, exclude=True)
     orientation_visit_id: str | None = Field(default=None, exclude=True)
     model_config = ConfigDict(from_attributes=True)

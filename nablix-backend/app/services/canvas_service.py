@@ -271,6 +271,8 @@ async def submit_canvas(
     begin_student_model_debug(settings.debug_json_view)
     # Load the session up front so a stale/unknown session 404s before we pay for OCR.
     session = _get_owned_session(request.session_id, request.student_id)
+    if session.current_phase == "TEACH_BACK" or session.pending_teach_back is not None:
+        raise HTTPException(status_code=409, detail="Canvas submissions are unavailable during Teach-Back.")
     if (
         session.current_phase == "INDEPENDENT_PRACTICE"
         and request.submission_role == "STANDALONE_ATTEMPT"

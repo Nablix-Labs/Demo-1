@@ -403,6 +403,13 @@ _SIDE_CHANNEL_UPDATE_FIELDS = {
 }
 
 
+async def store_teach_back_state(session: SessionRecord) -> SessionRecord:
+    """Persist recovery or committed turn state before publishing it in memory."""
+    await save_session(session)
+    _sessions[session.session_id] = session
+    return session
+
+
 async def update_side_channel_state(
     session: SessionRecord,
     updates: dict[str, object],
