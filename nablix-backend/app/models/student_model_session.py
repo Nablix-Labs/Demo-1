@@ -26,6 +26,8 @@ StudentModelPayloadPhase = StudentModelPhase | Literal["PHASE_1_TEACH_BACK"]
 
 
 class TeachBackStatePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     teach_back_id: str
     state: TeachBackState
 

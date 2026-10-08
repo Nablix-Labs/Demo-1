@@ -18,6 +18,7 @@ from app.models.session import (
 )
 from app.services.interaction_service import recover_session_for_read
 from app.services.session_service import (
+    interaction_lock_for,
     complete_diagnostic,
     complete_orientation,
     complete_review,
@@ -56,7 +57,8 @@ async def start_orientation_endpoint(
     request: OrientationPhaseRequest,
     access_token: AccessToken,
 ) -> SessionRecord:
-    return await start_orientation(session_id, request, access_token)
+    async with interaction_lock_for(session_id):
+        return await start_orientation(session_id, request, access_token)
 
 
 @router.post("/{session_id}/orientation/complete", response_model=SessionResponse)
@@ -65,7 +67,8 @@ async def complete_orientation_endpoint(
     request: OrientationCompletionRequest,
     access_token: AccessToken,
 ) -> SessionRecord:
-    return await complete_orientation(session_id, request, access_token)
+    async with interaction_lock_for(session_id):
+        return await complete_orientation(session_id, request, access_token)
 
 
 @router.get("/{session_id}", response_model=SessionResponse)

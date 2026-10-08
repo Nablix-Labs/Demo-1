@@ -43,6 +43,8 @@ from app.models.guided_learning import (
     inactivity_policy,
 )
 from app.models.student_model_session import (
+    WorkedExampleRequestedEvent,
+    OrientationCompletedEvent,
     TeachBackTurnRecordedEvent,
     TeachBackCompletedEvent,
     InterventionInputSubmittedEvent,
@@ -348,6 +350,7 @@ class SessionRecord(BaseModel):
     pending_teach_back: PendingTeachBackOperation | None = None
     teach_back_receipts: dict[str, TeachBackReceipt] = Field(default_factory=dict)
     teach_back_content: TeachBackPayload | None = None
+    orientation_events: dict[str, WorkedExampleRequestedEvent | OrientationCompletedEvent] = Field(default_factory=dict)
     orientation_visit_id: str | None = None
     journey_recovery_required: bool = False
 
@@ -375,6 +378,7 @@ class SessionRecord(BaseModel):
     canvas_state: CanvasState = Field(default_factory=CanvasState)
     ui_state: str
     message: str
+    message_voice: str | None = None
     diagnostic_transition_message: str | None = None
     diagnostic_transition_messages: list[str] = Field(default_factory=list)
     orientation_messages: Phase1TutorMessages | None = None
@@ -479,6 +483,7 @@ class SessionRecord(BaseModel):
 
 
 class SessionResponse(SessionRecord):
+    orientation_events: dict[str, WorkedExampleRequestedEvent | OrientationCompletedEvent] = Field(default_factory=dict, exclude=True)
     pending_teach_back: PendingTeachBackOperation | None = Field(default=None, exclude=True)
     teach_back_receipts: dict[str, TeachBackReceipt] = Field(default_factory=dict, exclude=True)
     teach_back_content: TeachBackPayload | None = Field(default=None, exclude=True)

@@ -4060,6 +4060,35 @@ async def _process_teach_back(request: InteractionRequest, session: SessionRecor
     return await _cache_response(request, response)
 
 
+async def _refresh_teach_back_conflict(session: SessionRecord, access_token: str) -> None:
+    """Rebase a refused event only when its validated explanation is still current."""
+    operation = session.pending_teach_back
+    previous = session.teach_back_content
+    if operation is None or previous is None:
+        raise RuntimeError("Teach-Back conflict has no pending operation or content.")
+    event = await get_adapters().student_model.send_session_event(SessionOpenedEvent(
+        request_id=f"{session.session_id}:TEACH-BACK-REFRESH-{uuid4()}", event_type="SESSION_OPENED",
+        topic_id=operation.turn_event.topic_id, student_id=session.student_id, timestamp=_schema_timestamp(),
+    ), access_token)
+    restored = await _apply_schema_event(session, event)
+    content = restored.teach_back_content
+    version = event.journey_state.version
+    if operation.recorded and restored.current_phase == "GUIDED_PRACTICE":
+        operation = operation.model_copy(update={"completion_event": None})
+    elif restored.current_phase == "TEACH_BACK" and content is not None and content.teach_back_id == previous.teach_back_id:
+        if operation.recorded and operation.completion_event is not None:
+            operation = operation.model_copy(update={"completion_event": operation.completion_event.model_copy(update={"expected_journey_version": version})})
+        elif (content.state.current_micro_skill_id == previous.state.current_micro_skill_id
+              and content.state.failed_explanation_count == previous.state.failed_explanation_count
+              and content.state.completed_micro_skill_ids == previous.state.completed_micro_skill_ids):
+            operation = operation.model_copy(update={"turn_event": operation.turn_event.model_copy(update={"expected_journey_version": version})})
+        else:
+            operation = None
+    else:
+        operation = None
+    await store_teach_back_state(restored.model_copy(update={"pending_teach_back": operation}))
+
+
 async def _resume_teach_back(session: SessionRecord, access_token: str) -> tuple[SessionRecord, InteractionResponse]:
     operation = session.pending_teach_back
     if operation is None:
@@ -4067,7 +4096,11 @@ async def _resume_teach_back(session: SessionRecord, access_token: str) -> tuple
     turn = operation.turn_event
     reply = operation.reply
     if not operation.recorded:
-        event = await get_adapters().student_model.send_session_event(turn, access_token)
+        try:
+            event = await get_adapters().student_model.send_session_event(turn, access_token)
+        except JourneyVersionConflict:
+            await _refresh_teach_back_conflict(session, access_token)
+            raise
         payload = event.phase_payload
         if reply.next_action == "RETURN_TO_ORIENTATION":
             if payload is None or payload.phase != "PHASE_1_ORIENTATION" or payload.orientation_bundle is None or not payload.orientation_bundle.delivery_sequence:
@@ -4103,7 +4136,11 @@ async def _resume_teach_back(session: SessionRecord, access_token: str) -> tuple
         operation = operation.model_copy(update={"recorded": True, "completion_event": completion})
         session = await _apply_schema_event(session.model_copy(update={"pending_teach_back": operation}), event)
     if operation.completion_event is not None:
-        event = await get_adapters().student_model.send_session_event(operation.completion_event, access_token)
+        try:
+            event = await get_adapters().student_model.send_session_event(operation.completion_event, access_token)
+        except JourneyVersionConflict:
+            await _refresh_teach_back_conflict(session, access_token)
+            raise
         payload = event.phase_payload
         if payload is None or payload.phase != "PHASE_2_GUIDED_LEARNING" or payload.question_set is None or not payload.question_set.questions:
             raise HTTPException(status_code=503, detail="Student Model returned no guided content after Teach-Back completion.")
@@ -4119,7 +4156,7 @@ async def _resume_teach_back(session: SessionRecord, access_token: str) -> tuple
     session = session.model_copy(update={
         "pending_teach_back": None, "teach_back_content": content,
         "conversation_history": history, "interaction_state_version": session.interaction_state_version + 1,
-        "message": reply.tutor_message, **_accepted_turn_identity(turn.source_turn_id),
+        "message": reply.tutor_message, "message_voice": reply.tutor_message_voice, **_accepted_turn_identity(turn.source_turn_id),
     })
     response = _response_from(session.session_id, session.student_id, turn.source_turn_id, "TEACH_BACK_SUBMISSION", None,
                               session, reply.tutor_message, reply.tutor_message_voice, None, [], None,
@@ -4196,8 +4233,8 @@ async def _process_interaction(
         return await _process_teach_back(request, session, access_token)
     if request.interaction_type == "TEACH_BACK_SUBMISSION":
         raise HTTPException(status_code=409, detail="The authoritative session is outside Teach-Back.")
-    if request.input_source == "VOICE" and request.interaction_type == "ANSWER_SUBMISSION" and request.canvas_state is None:
-        raise HTTPException(status_code=422, detail="canvas_state is required for REST VOICE answer submissions.")
+    if request.current_phase == "TEACH_BACK":
+        raise HTTPException(status_code=409, detail="The authoritative session is outside Teach-Back.")
 
     if session.current_phase == "INDEPENDENT_PRACTICE":
         if request.interaction_type == "CLARIFICATION_REQUEST":

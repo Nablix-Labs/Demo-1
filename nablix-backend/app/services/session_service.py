@@ -993,6 +993,7 @@ async def start_session(
         question_opening_canvas_actions=opening_actions,
         interaction_mode=request.interaction_mode,
         ui_state=phase,
+        orientation_visit_id=str(uuid4()) if phase == "CONCEPT_ORIENTATION" else None,
         message=(
             "Session Review — practice questions complete."
             if phase == "REVIEW"
@@ -1066,6 +1067,8 @@ async def start_session(
     # path was always intended; only the review was missing.
     if session.current_phase == "REVIEW":
         session = session.model_copy(update={"review_materialization_state": "PENDING"})
+    if phase == "TEACH_BACK":
+        session = session.model_copy(update=_teach_back_updates(session, event))
     _sessions[session_id] = session
     await save_session(session)
     if session.current_phase == "REVIEW":
@@ -1082,8 +1085,6 @@ async def start_session(
             review_materialization_state=session.review_materialization_state,
         )
         return await _attach_phase4_review(session, event)
-    if session.current_phase == "TEACH_BACK":
-        return await _apply_schema_event(session, event)
     return session
 
 
@@ -1642,6 +1643,8 @@ def _teach_back_updates(session: SessionRecord, event: StudentModelSessionEventR
     if incoming is None or incoming.teach_back_id != incoming.state.teach_back_id:
         raise HTTPException(status_code=503, detail="Student Model returned missing or inconsistent Teach-Back context.")
     retained = session.teach_back_content
+    if retained is not None and session.current_phase == "TEACH_BACK" and retained.teach_back_id != incoming.teach_back_id:
+        raise HTTPException(status_code=503, detail="Student Model changed the active Teach-Back run identity.")
     if isinstance(incoming, TeachBackPayload):
         content = incoming
     elif retained is not None and retained.teach_back_id == incoming.teach_back_id:
@@ -1668,9 +1671,10 @@ def _teach_back_updates(session: SessionRecord, event: StudentModelSessionEventR
     last = state.last_tutor_response
     summary = next((item for item in content.phase1_context.teaching_summary if item.micro_skill_id == state.current_micro_skill_id), None)
     message = last.tutor_response if last is not None else load_teach_back_config().opening_message.format(skill_name=summary.skill_name) if summary is not None else session.message
-    return {"teach_back_content": content, "message": message, "current_question": None,
+    return {"teach_back_content": content, "message": message,
+            "message_voice": last.tutor_response_voice if last is not None else message, "current_question": None,
             "question_id": None, "correct_answer": None, "active_student_model_question": None,
-            "conversation_history": session.conversation_history if retained is not None and retained.teach_back_id == content.teach_back_id else [],
+            "conversation_history": session.conversation_history if retained is not None and retained.teach_back_id == content.teach_back_id else [ConversationMessage(role="assistant", content=last.tutor_response)] if last is not None else [],
             "attempt_count": session.attempt_count, "hint_count": session.hint_count,
             "canvas_state": session.canvas_state, "question_completed": session.question_completed}
 
@@ -2036,8 +2040,8 @@ async def _apply_schema_event(
     if next_phase == "TEACH_BACK":
         updates.update(_teach_back_updates(session, event))
     updated = session.model_copy(update=updates)
-    _sessions[session.session_id] = updated
     await save_session(updated)
+    _sessions[session.session_id] = updated
     if transition is not None and next_phase == "REVIEW":
         _log_lifecycle(
             updated,
@@ -2356,6 +2360,22 @@ def _validate_orientation_completion(
         )
 
 
+async def _send_orientation_event(
+    session: SessionRecord,
+    event: WorkedExampleRequestedEvent | OrientationCompletedEvent,
+    access_token: str,
+) -> tuple[SessionRecord, StudentModelSessionEventResponse]:
+    """Keep the exact event envelope for every retry of this orientation visit."""
+    stored = session.orientation_events.get(event.request_id)
+    if stored is None:
+        session = await store_teach_back_state(session.model_copy(update={
+            "orientation_events": {**session.orientation_events, event.request_id: event},
+        }))
+        stored = event
+    response = await get_adapters().student_model.send_session_event(stored, access_token)
+    return session, response
+
+
 async def start_orientation(
     session_id: str,
     request: OrientationPhaseRequest,
@@ -2367,12 +2387,15 @@ async def start_orientation(
             status_code=409,
             detail="The session is not in CONCEPT_ORIENTATION.",
         )
+    if session.orientation_visit_id is None:
+        session = await store_teach_back_state(session.model_copy(update={"orientation_visit_id": str(uuid4())}))
     event = session.student_model_event
     if event is None:
         raise RuntimeError("Schema 3.0 session is missing its stored event.")
     if session.prerequisite_remediation is not None:
         return await _start_prerequisite_stop(session)
-    response = await get_adapters().student_model.send_session_event(
+    session, response = await _send_orientation_event(
+        session,
         WorkedExampleRequestedEvent(
             request_id=_schema_request_id(
                 session,
@@ -2380,7 +2403,7 @@ async def start_orientation(
                 "WORKED_EXAMPLE_REQUESTED",
             ),
             event_type="WORKED_EXAMPLE_REQUESTED",
-            source_turn_id="WORKED_EXAMPLE_REQUESTED",
+            source_turn_id=f"{session.orientation_visit_id}:WORKED_EXAMPLE_REQUESTED",
             expected_journey_version=event.journey_state.version,
             topic_id=event.journey_state.topic_id,
             student_id=session.student_id,
@@ -2412,6 +2435,8 @@ async def complete_orientation(
             status_code=409,
             detail="The session is not in CONCEPT_ORIENTATION.",
         )
+    if session.orientation_visit_id is None:
+        session = await store_teach_back_state(session.model_copy(update={"orientation_visit_id": str(uuid4())}))
     event = session.student_model_event
     if event is None:
         raise RuntimeError("Schema 3.0 session is missing its stored event.")
@@ -2423,7 +2448,8 @@ async def complete_orientation(
             detail="Orientation must be started before it can be completed.",
         )
     _validate_orientation_completion(session, request)
-    response = await get_adapters().student_model.send_session_event(
+    session, response = await _send_orientation_event(
+        session,
         OrientationCompletedEvent(
             request_id=_schema_request_id(
                 session,
@@ -2431,7 +2457,7 @@ async def complete_orientation(
                 "ORIENTATION_COMPLETED",
             ),
             event_type="ORIENTATION_COMPLETED",
-            source_turn_id="ORIENTATION_COMPLETED",
+            source_turn_id=f"{session.orientation_visit_id}:ORIENTATION_COMPLETED",
             expected_journey_version=event.journey_state.version,
             topic_id=event.journey_state.topic_id,
             student_id=session.student_id,
@@ -3258,6 +3284,8 @@ async def record_canvas_attachment(
     """Store voice-attached OCR without counting a second student attempt."""
 
     session: SessionRecord = _get_owned_session(session_id, student_id)
+    if session.current_phase == "TEACH_BACK" or session.pending_teach_back is not None:
+        raise HTTPException(status_code=409, detail="Canvas submissions are unavailable during Teach-Back.")
     if session.status == "ended":
         raise HTTPException(
             status_code=409,
