@@ -14,9 +14,25 @@ from app.models.adapters import ConversationMessage
 from app.models.teach_back import TeachBackAction, TeachBackEvaluation, TeachBackPayload, TeachBackReply
 
 
+class TeachBackRealtimeConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    model: str
+    transcription_model: str
+    client_secret_url: str
+    calls_url: str
+    token_lifetime_seconds: int = Field(ge=10, le=600)
+    response_timeout_seconds: int = Field(ge=5, le=120)
+    tool_name: str
+    tool_description: str
+    transport_instructions: str
+
+
 class TeachBackConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    realtime: TeachBackRealtimeConfig
     max_failed_explanations: int = Field(ge=1)
     opening_message: str
     return_to_orientation_message: str
@@ -96,14 +112,9 @@ def validate_teach_back_reply(content: TeachBackPayload, reply: TeachBackReply) 
             raise ValueError("Teach-Back reply failed the existing safety check.")
 
 
-def generate_teach_back_reply(
-    content: TeachBackPayload,
-    student_input: str,
-    input_source: str,
-    transcript_confidence: float | None,
-    history: list[ConversationMessage],
-) -> TeachBackReply:
-    validate_teach_back_content(content)
+def teach_back_input_reply(
+    student_input: str, input_source: str, transcript_confidence: float | None,
+) -> TeachBackReply | None:
     config = load_teach_back_config()
     rules = load_classifier_rules()
     clarification: str | None = None
@@ -126,13 +137,17 @@ def generate_teach_back_reply(
             tutor_message=rules.guided_learning.critical_thinking.distress_message,
             tutor_message_voice=rules.guided_learning.critical_thinking.distress_message, next_action="ASK_TEACH_BACK",
         )
-    client = build_openai_ai_engine_client(get_settings())
-    if client is None:
-        raise AdapterError("teach_back", "Teach-Back requires the configured AI engine and an API key.")
+    return None
+
+
+def build_teach_back_context(
+    content: TeachBackPayload, student_input: str, input_source: str,
+    transcript_confidence: float | None,
+) -> dict[str, object]:
     current = next(t for t in content.targets if t.micro_skill_id == content.state.current_micro_skill_id)
     next_target = next((t for t in content.targets if t.micro_skill_id != current.micro_skill_id
                         and t.micro_skill_id not in content.state.completed_micro_skill_ids), None)
-    context: dict[str, object] = {
+    return {
         "current_target": current.model_dump(),
         "next_target": next_target.model_dump() if next_target is not None else None,
         "phase1_context": content.phase1_context.model_dump(),
@@ -144,6 +159,24 @@ def generate_teach_back_reply(
         "required_actions": {v: teach_back_action(content, v) for v in ("UNDERSTOOD", "MISCONCEPTION")},
         "discussion_actions": ["ASK_TEACH_BACK", "DISCUSS_AND_CLARIFY", "ASK_REEXPLANATION"],
     }
+
+
+def generate_teach_back_reply(
+    content: TeachBackPayload,
+    student_input: str,
+    input_source: str,
+    transcript_confidence: float | None,
+    history: list[ConversationMessage],
+) -> TeachBackReply:
+    validate_teach_back_content(content)
+    input_reply = teach_back_input_reply(student_input, input_source, transcript_confidence)
+    if input_reply is not None:
+        return input_reply
+    rules = load_classifier_rules()
+    client = build_openai_ai_engine_client(get_settings())
+    if client is None:
+        raise AdapterError("teach_back", "Teach-Back requires the configured AI engine and an API key.")
+    context = build_teach_back_context(content, student_input, input_source, transcript_confidence)
     try:
         reply = TeachBackReply.model_validate(client.generate_teach_back(
             context, TeachBackReply.model_json_schema(), history[-rules.conversation_rules.max_recent_messages:] if rules.conversation_rules.max_recent_messages else []
