@@ -333,3 +333,33 @@ def test_missing_persisted_reply_keeps_recovery_pending(upstream: dict[str, obje
     assert session.last_processed_turn_id is None
     assert session.conversation_history == []
     assert upstream["engine_calls"] == 1
+
+
+def test_orientation_waits_for_second_failure_receipt(upstream: dict[str, object], monkeypatch: pytest.MonkeyPatch) -> None:
+    session_id = upstream["session_id"]
+    first = client.post("/interaction", json=submission(session_id, "TURN-001", "An object", "TEXT", "TEACH_BACK_SUBMISSION"))
+    assert first.status_code == 200, first.text
+    original_store = interaction_service.store_teach_back_state
+
+    async def interrupt_receipt(session: SessionRecord) -> SessionRecord:
+        if "TURN-002" in session.teach_back_receipts:
+            raise AdapterError("session_store", "Simulated unavailable receipt commit")
+        return await original_store(session)
+
+    monkeypatch.setattr(interaction_service, "store_teach_back_state", interrupt_receipt)
+    interrupted = client.post("/interaction", json=submission(session_id, "TURN-002", "An object", "TEXT", "TEACH_BACK_SUBMISSION"))
+    assert interrupted.status_code == 503, interrupted.text
+    stored = session_service._sessions[session_id]
+    assert stored.current_phase == "CONCEPT_ORIENTATION" and stored.pending_teach_back.recorded
+    session_service._sessions[session_id] = SessionRecord.model_validate(stored.model_dump(mode="json"))
+    event_count = len(upstream["events"])
+    start = client.post(f"/session/{session_id}/orientation/start", json={"student_id": "ST001"})
+    completion = client.post(f"/session/{session_id}/orientation/complete", json={"student_id": "ST001", "completed_video_ids": ["VID-KS3-T02-ORI"], "completed_worked_example_ids": ["WE-KS3-T02-01"]})
+    assert start.status_code == completion.status_code == 409
+    assert len(upstream["events"]) == event_count
+    monkeypatch.setattr(interaction_service, "store_teach_back_state", original_store)
+    recovered = client.get(f"/session/{session_id}", params={"student_id": "ST001"})
+    assert recovered.status_code == 200, recovered.text
+    assert session_service._sessions[session_id].pending_teach_back is None
+    assert "TURN-002" in session_service._sessions[session_id].teach_back_receipts
+    assert upstream["engine_calls"] == 2

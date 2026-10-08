@@ -486,6 +486,12 @@ def _get_owned_session_for_turn(
     return session
 
 
+def require_teach_back_recovered(session: SessionRecord) -> None:
+    """Block learning mutations until the accepted Teach-Back turn is committed."""
+    if session.pending_teach_back is not None:
+        raise HTTPException(status_code=409, detail="Teach-Back recovery is pending; refresh the session before submitting another turn.")
+
+
 def require_learning_active(session: SessionRecord) -> None:
     """Refuse learning work while the authoritative topic intervention is active."""
 
@@ -2387,6 +2393,7 @@ async def start_orientation(
     access_token: str,
 ) -> SessionRecord:
     session = _schema_session(session_id, request.student_id)
+    require_teach_back_recovered(session)
     if session.current_phase != "CONCEPT_ORIENTATION":
         raise HTTPException(
             status_code=409,
@@ -2435,6 +2442,7 @@ async def complete_orientation(
     access_token: str,
 ) -> SessionRecord:
     session = _schema_session(session_id, request.student_id)
+    require_teach_back_recovered(session)
     if session.current_phase != "CONCEPT_ORIENTATION":
         raise HTTPException(
             status_code=409,

@@ -23,9 +23,9 @@ Contract definitions are in `nablix-backend/app/models/student_model_session.py`
 
 ## Verification needed together
 
-The 40 focused backend checks pass, including 15 orchestration route/recovery cases. They use the repository's simulated Student Model transport and disabled database persistence. They prove orchestration behavior, not a live service or database integration.
+The 41 focused backend checks pass, including 16 orchestration route/recovery cases. They use the repository's simulated Student Model transport and disabled database persistence. They prove orchestration behavior, not a live service or database integration.
 
-The broad backend run has 1,053 passing tests and 29 failures. A clean `origin/main` checkout reproduces the same 29 failures: 28 RAG/service checks and the existing orientation-opening wording assertion in `test_session_events.py`. There are no new failing test names.
+The broad backend run has 1,054 passing tests and 29 failures. A clean `origin/main` checkout reproduces the same 29 failures: 28 RAG/service checks and the existing orientation-opening wording assertion in `test_session_events.py`. There are no new failing test names.
 
 After the Student Model changes and required migrations are applied to a local test database, run a real integration smoke: diagnostic selection, first failure, second-failure orientation, same-run resume, final completion, refresh/restart, and lost-response replay. Inspect `student_model.teach_back_runs`, `teach_back_results`, `teach_back_turns`, retained event responses, and the backend session snapshot. Confirm one turn per accepted ID, persisted counts/replies, retained understood skills, and unchanged problem attempts/mastery. This smoke remains pending because the current Student Model contract is incomplete. Nothing here is deployment proof.
 

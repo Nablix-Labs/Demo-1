@@ -14,7 +14,7 @@ from app.ai_engine.teach_back import validate_teach_back_reply
 from app.models.session import PendingTeachBackOperation, TeachBackReceipt
 from app.models.teach_back import TeachBackStoredReply
 from app.models.student_model_session import TeachBackTurnRecordedEvent, TeachBackCompletedEvent
-from app.services.session_service import store_teach_back_state, _schema_request_id, _schema_timestamp
+from app.services.session_service import store_teach_back_state, require_teach_back_recovered, _schema_request_id, _schema_timestamp
 
 from app.adapters.base import StudentModelAdapter
 from app.adapters.provider import get_adapters
@@ -4238,8 +4238,7 @@ async def _process_interaction(
     if _turn_is_stale(request, session):
         return _stale_turn_response(session)
 
-    if session.pending_teach_back is not None:
-        raise HTTPException(status_code=409, detail="Teach-Back recovery is pending; refresh the session before submitting another turn.")
+    require_teach_back_recovered(session)
     if session.current_phase == "TEACH_BACK":
         return await _process_teach_back(request, session, access_token)
     if request.interaction_type == "TEACH_BACK_SUBMISSION":
