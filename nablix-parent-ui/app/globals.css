@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body { background: #F8F5E4; color: #1F1D1A; }
+body { -webkit-font-smoothing: antialiased; font-weight: 600; }
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* A printed report is the page without the app chrome. */
+@media print {
+  .no-print { display: none !important; }
+  body, html { background: #fff; }
+  .print-full { margin: 0 !important; padding: 0 !important; max-width: none !important; }
+}
