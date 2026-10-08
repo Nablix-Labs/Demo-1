@@ -4109,6 +4109,7 @@ async def _resume_teach_back(session: SessionRecord, access_token: str) -> tuple
         )
         if (acknowledged is None or acknowledged.teach_back_id != turn.teach_back_id
                 or acknowledged.state.teach_back_id != turn.teach_back_id
+                or acknowledged.state.status != "IN_PROGRESS"
                 or acknowledged.state.target_micro_skill_ids != session.teach_back_content.state.target_micro_skill_ids
                 or acknowledged.state.last_tutor_response != expected_reply):
             raise HTTPException(status_code=503, detail="Student Model omitted or changed the persisted Teach-Back turn and reply.")

@@ -211,9 +211,13 @@ def test_misconceptions_discussion_and_revisit(upstream: dict[str, object]) -> N
         response = client.post("/interaction", json=submission(session_id, turn, message, "TEXT", "TEACH_BACK_SUBMISSION"))
         assert response.status_code == 200, response.text
         assert session_service._sessions[session_id].teach_back_content.state.failed_explanation_count == 1
+    before_revisit = session_service._sessions[session_id]
     second_failure = client.post("/interaction", json=submission(session_id, "TURN-004", "An object", "TEXT", "TEACH_BACK_SUBMISSION"))
     assert second_failure.status_code == 200, second_failure.text
     assert second_failure.json()["current_phase"] == "CONCEPT_ORIENTATION"
+    assert session_service._sessions[session_id].attempt_count == before_revisit.attempt_count
+    assert session_service._sessions[session_id].canvas_state == before_revisit.canvas_state
+    assert session_service._sessions[session_id].teach_back_content.state.failed_explanation_count == 2
     revisit = client.post(f"/session/{session_id}/orientation/complete", json={"student_id": "ST001", "completed_video_ids": ["VID-KS3-T02-ORI"], "completed_worked_example_ids": ["WE-KS3-T02-01"]})
     assert revisit.status_code == 200, revisit.text
     assert revisit.json()["current_phase"] == "TEACH_BACK"

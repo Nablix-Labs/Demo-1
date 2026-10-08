@@ -1656,6 +1656,8 @@ def _teach_back_updates(session: SessionRecord, event: StudentModelSessionEventR
         if not set(retained.state.completed_micro_skill_ids).issubset(state.completed_micro_skill_ids):
             raise HTTPException(status_code=503, detail="Student Model discarded understood Teach-Back skills.")
     if state.status == "NOT_STARTED":
+        if state.completed_micro_skill_ids or state.failed_explanation_count not in (None, 0):
+            raise HTTPException(status_code=503, detail="A new Teach-Back run already contains progress.")
         state = state.model_copy(update={"status": "IN_PROGRESS", "failed_explanation_count": 0})
         content = content.model_copy(update={"state": state})
     # All targets may be acknowledged before the separate completion event.
@@ -2039,6 +2041,9 @@ async def _apply_schema_event(
         updates["orientation_visit_id"] = str(uuid4())
     if next_phase == "TEACH_BACK":
         updates.update(_teach_back_updates(session, event))
+    if session.current_phase == "TEACH_BACK" and not has_questions:
+        updates.update({"attempt_count": session.attempt_count, "hint_count": session.hint_count,
+                        "question_completed": session.question_completed, "canvas_state": session.canvas_state})
     updated = session.model_copy(update=updates)
     await save_session(updated)
     _sessions[session.session_id] = updated
