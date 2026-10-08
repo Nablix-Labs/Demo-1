@@ -12,6 +12,8 @@ from app.adapters.provider import get_adapters
 from app.core.config import get_settings
 from app.core.exceptions import DOWNSTREAM_FAILURE, JourneyVersionConflict
 from app.core.logger import logger
+from app.ai_engine.teach_back import load_teach_back_config, validate_teach_back_content
+from app.models.teach_back import TeachBackPayload
 from app.ai_engine.phase4_review import generate_phase4_review
 from app.models.phase4_review import Phase4ReviewResponse, QuestionJourneyItem
 from app.models.work_artifact import Phase4ReviewPersistRequest
@@ -60,6 +62,8 @@ from app.models.session import (
 )
 from app.models.student_model_session import (
     DiagnosticResult,
+    DiagnosticQuestionResult,
+    StudentModelPayloadPhase,
     DiagnosticCompletedEvent,
     Phase3Checkpoint,
     PrerequisiteRemediationBundle,
@@ -1071,6 +1075,8 @@ async def start_session(
             review_materialization_state=session.review_materialization_state,
         )
         return await _attach_phase4_review(session, event)
+    if session.current_phase == "TEACH_BACK":
+        return await _apply_schema_event(session, event)
     return session
 
 
@@ -1089,7 +1095,8 @@ def _validate_session_opened_payload(
         or event.journey_state.current_phase
     )
     if payload.phase != expected_phase and not (
-        expected_phase == "PHASE_3_INDEPENDENT_PRACTICE" and payload.phase == "REVIEW"
+        (expected_phase == "PHASE_3_INDEPENDENT_PRACTICE" and payload.phase == "REVIEW")
+        or (expected_phase == "PHASE_1_ORIENTATION" and payload.phase == "PHASE_1_TEACH_BACK")
     ):
         raise HTTPException(
             status_code=503,
@@ -1099,7 +1106,8 @@ def _validate_session_opened_payload(
             ),
         )
 
-    expected_types: dict[StudentModelPhase, set[str]] = {
+    expected_types: dict[StudentModelPayloadPhase, set[str]] = {
+        "PHASE_1_TEACH_BACK": {"TEACH_BACK"},
         "PHASE_0_DIAGNOSTIC": {"QUESTION_SET"},
         "PHASE_1_ORIENTATION": {"ORIENTATION_BUNDLE"},
         "PHASE_2_GUIDED_LEARNING": {
@@ -1308,7 +1316,7 @@ def _payload_phase_state(
         "PHASE_3_INDEPENDENT_PRACTICE": journey.phase_3_independent_practice,
         "REVIEW": journey.review,
     }
-    return phase_states[payload.phase]
+    return phase_states["PHASE_1_ORIENTATION" if payload.phase == "PHASE_1_TEACH_BACK" else payload.phase]
 
 
 def _restore_counter(
@@ -1329,7 +1337,7 @@ def _restore_counter(
 
 def _require_schema_phase(
     event: StudentModelSessionEventResponse,
-    allowed_phases: tuple[StudentModelPhase, ...],
+    allowed_phases: tuple[StudentModelPayloadPhase, ...],
 ) -> None:
     payload = event.phase_payload
     if payload is None or payload.phase not in allowed_phases:
@@ -1619,6 +1627,45 @@ async def _attach_phase4_review(
                 return session
             continue
         return await _set_review_materialization_state(session, "READY", review)
+
+
+def _teach_back_updates(session: SessionRecord, event: StudentModelSessionEventResponse) -> dict[str, object]:
+    payload = event.phase_payload
+    incoming = payload.teach_back if payload is not None else None
+    if incoming is None or incoming.teach_back_id != incoming.state.teach_back_id:
+        raise HTTPException(status_code=503, detail="Student Model returned missing or inconsistent Teach-Back context.")
+    retained = session.teach_back_content
+    if isinstance(incoming, TeachBackPayload):
+        content = incoming
+    elif retained is not None and retained.teach_back_id == incoming.teach_back_id:
+        content = retained.model_copy(update={"state": incoming.state})
+    else:
+        raise HTTPException(status_code=503, detail="State-only Teach-Back response has no matching retained content.")
+    state = content.state
+    if retained is not None and retained.teach_back_id == content.teach_back_id:
+        if not set(retained.state.completed_micro_skill_ids).issubset(state.completed_micro_skill_ids):
+            raise HTTPException(status_code=503, detail="Student Model discarded understood Teach-Back skills.")
+    if state.status == "NOT_STARTED":
+        state = state.model_copy(update={"status": "IN_PROGRESS", "failed_explanation_count": 0})
+        content = content.model_copy(update={"state": state})
+    # All targets may be acknowledged before the separate completion event.
+    if state.current_micro_skill_id is not None:
+        validate_teach_back_content(content)
+    elif set(state.completed_micro_skill_ids) != set(state.target_micro_skill_ids):
+        raise HTTPException(status_code=503, detail="Teach-Back has no active target but is incomplete.")
+    if state.failed_explanation_count is None:
+        raise HTTPException(status_code=503, detail="Student Model omitted Teach-Back failure count.")
+    if session.current_phase == "CONCEPT_ORIENTATION" and retained is not None:
+        if content.teach_back_id != retained.teach_back_id or state.failed_explanation_count != 0:
+            raise HTTPException(status_code=503, detail="Orientation revisit must resume the same Teach-Back run with zero failures.")
+    last = state.last_tutor_response
+    summary = next((item for item in content.phase1_context.teaching_summary if item.micro_skill_id == state.current_micro_skill_id), None)
+    message = last.tutor_response if last is not None else load_teach_back_config().opening_message.format(skill_name=summary.skill_name) if summary is not None else session.message
+    return {"teach_back_content": content, "message": message, "current_question": None,
+            "question_id": None, "correct_answer": None, "active_student_model_question": None,
+            "conversation_history": session.conversation_history if retained is not None and retained.teach_back_id == content.teach_back_id else [],
+            "attempt_count": session.attempt_count, "hint_count": session.hint_count,
+            "canvas_state": session.canvas_state, "question_completed": session.question_completed}
 
 
 async def _apply_schema_event(
@@ -1977,6 +2024,10 @@ async def _apply_schema_event(
         transition is not None or session.review_materialization_state is None
     ):
         updates["review_materialization_state"] = "PENDING"
+    if next_phase == "CONCEPT_ORIENTATION" and (session.current_phase != next_phase or session.orientation_visit_id is None):
+        updates["orientation_visit_id"] = str(uuid4())
+    if next_phase == "TEACH_BACK":
+        updates.update(_teach_back_updates(session, event))
     updated = session.model_copy(update=updates)
     _sessions[session.session_id] = updated
     await save_session(updated)
@@ -2170,6 +2221,8 @@ async def complete_diagnostic(
             student_id=session.student_id,
             timestamp=_schema_timestamp(),
             micro_skill_results=_diagnostic_results(session, request, graded),
+            diagnostic_run_id=_schema_request_id(session, "DIAGNOSTIC_COMPLETED", "DIAGNOSTIC_COMPLETED"),
+            question_results=[DiagnosticQuestionResult(question_id=q.question_id, question_usage_id=q.question_usage_id, result=result) for q, result in graded],
         ),
         access_token,
     )
@@ -2316,7 +2369,7 @@ async def start_orientation(
         WorkedExampleRequestedEvent(
             request_id=_schema_request_id(
                 session,
-                "WORKED_EXAMPLE_REQUESTED",
+                session.orientation_visit_id or "WORKED_EXAMPLE_REQUESTED",
                 "WORKED_EXAMPLE_REQUESTED",
             ),
             event_type="WORKED_EXAMPLE_REQUESTED",
@@ -2367,7 +2420,7 @@ async def complete_orientation(
         OrientationCompletedEvent(
             request_id=_schema_request_id(
                 session,
-                "ORIENTATION_COMPLETED",
+                session.orientation_visit_id or "ORIENTATION_COMPLETED",
                 "ORIENTATION_COMPLETED",
             ),
             event_type="ORIENTATION_COMPLETED",
@@ -2380,7 +2433,9 @@ async def complete_orientation(
         ),
         access_token,
     )
-    _require_schema_phase(response, ("PHASE_2_GUIDED_LEARNING",))
+    _require_schema_phase(response, ("PHASE_1_TEACH_BACK", "PHASE_2_GUIDED_LEARNING"))
+    if response.phase_payload is not None and response.phase_payload.phase == "PHASE_1_TEACH_BACK":
+        return await _apply_schema_event(session, response)
     if (
         response.phase_payload is None
         or response.phase_payload.question_set is None
@@ -3116,6 +3171,9 @@ async def record_canvas_submission(
             status_code=409,
             detail=f"Session with ID {session_id} has ended.",
         )
+
+    if session.current_phase == "TEACH_BACK":
+        raise HTTPException(status_code=409, detail="Canvas submissions are unavailable during Teach-Back.")
 
     per_question_history: list[QuestionAttemptRecord] = session.per_question_history
     if record.tutor.evaluation != "UNCLEAR":

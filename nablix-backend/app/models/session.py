@@ -3,6 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
+from app.models.teach_back import TeachBackPayload
 from app.models.adapters import (
     CanvasFeedback,
     ConversationMessage,
@@ -328,6 +329,8 @@ class SessionRecord(BaseModel):
     # re-sending THIS event -- never by deciding a fresh escalation against the
     # journey the first one already advanced.
     pending_support_event: GuidedSupportEvent | None = None
+    teach_back_content: TeachBackPayload | None = None
+    orientation_visit_id: str | None = None
     journey_recovery_required: bool = False
 
     session_id: SessionId
@@ -458,6 +461,8 @@ class SessionRecord(BaseModel):
 
 
 class SessionResponse(SessionRecord):
+    teach_back_content: TeachBackPayload | None = Field(default=None, exclude=True)
+    orientation_visit_id: str | None = Field(default=None, exclude=True)
     model_config = ConfigDict(from_attributes=True)
 
     # Numera-ui/lib/phase3Routing.ts reads `routing` here, at the root, beside
