@@ -813,6 +813,25 @@ function nextSystemTurnId(kind: 'NUDGE' | 'NUDGE-ACK'): string {
 }
 
 /**
+ * Make a fetched session record the store's session: its concept, topic, record
+ * and phase.
+ *
+ * activeConceptId is not persisted, so a refresh inside any topic but the
+ * default one held a concept the record did not match, and syncBackendSession's
+ * guard dropped the record — a blank lesson after refresh in topic 2, and a
+ * locked Teach-Back screen after refresh on /teach.
+ */
+export function adoptSessionRecord(rec: SessionRecord): void {
+  const s = useNumeraStore.getState();
+  if (rec.concept_id?.trim()) {
+    s.setActiveConceptId(rec.concept_id.trim());
+    s.setCurrentTopic(sessionTopicId(rec) ?? rec.concept_id.trim());
+  }
+  s.setBackendSession(rec);
+  syncBackendSession(rec);
+}
+
+/**
  * Rehydrate a persisted session after a page refresh.
  *
  * `sessionId` survives the refresh (persist/partialize) but `backendSession`,
@@ -833,16 +852,7 @@ export async function resumeSession(): Promise<void> {
       const rec = await getSession(store.sessionId!, studentId());
       const s = useNumeraStore.getState();
       s.setSessionResumeFailed(false);
-      // Same reason as beginSession: activeConceptId is not persisted, so a
-      // refresh inside any topic but the default one resumed a record whose
-      // concept the store did not hold, and the guard dropped it — blank
-      // lesson after refresh in topic 2.
-      if (rec.concept_id?.trim()) {
-        s.setActiveConceptId(rec.concept_id.trim());
-        s.setCurrentTopic(sessionTopicId(rec) ?? rec.concept_id.trim());
-      }
-      s.setBackendSession(rec);
-      syncBackendSession(rec);
+      adoptSessionRecord(rec);
       // Restore the cue the backend still has open for this question.
       //
       // None of the visualCue* fields are persisted — they are per-turn support
