@@ -4054,7 +4054,7 @@ async def _process_teach_back(request: InteractionRequest, session: SessionRecor
         tutor_response_voice=reply.tutor_message_voice, tutor_next_action=reply.next_action,
     )
     operation = PendingTeachBackOperation(reply=reply, evidence_fingerprint=_request_fingerprint(request),
-                                         turn_event=turn_event, original_phase=session.current_phase)
+                                         turn_event=turn_event, original_phase=session.current_phase, interaction_type=request.interaction_type)
     session = await store_teach_back_state(session.model_copy(update={"pending_teach_back": operation}))
     session, response = await _resume_teach_back(session, access_token)
     return await _cache_response(request, response)
@@ -4102,6 +4102,16 @@ async def _resume_teach_back(session: SessionRecord, access_token: str) -> tuple
             await _refresh_teach_back_conflict(session, access_token)
             raise
         payload = event.phase_payload
+        acknowledged = payload.teach_back if payload is not None else None
+        expected_reply = TeachBackStoredReply(
+            tutor_response=reply.tutor_message, tutor_response_voice=reply.tutor_message_voice,
+            tutor_next_action=reply.next_action, turn_id=turn.source_turn_id,
+        )
+        if (acknowledged is None or acknowledged.teach_back_id != turn.teach_back_id
+                or acknowledged.state.teach_back_id != turn.teach_back_id
+                or acknowledged.state.target_micro_skill_ids != session.teach_back_content.state.target_micro_skill_ids
+                or acknowledged.state.last_tutor_response != expected_reply):
+            raise HTTPException(status_code=503, detail="Student Model omitted or changed the persisted Teach-Back turn and reply.")
         if reply.next_action == "RETURN_TO_ORIENTATION":
             if payload is None or payload.phase != "PHASE_1_ORIENTATION" or payload.orientation_bundle is None or not payload.orientation_bundle.delivery_sequence:
                 raise HTTPException(status_code=503, detail="Student Model must atomically return the failed skill orientation bundle.")
@@ -4158,7 +4168,7 @@ async def _resume_teach_back(session: SessionRecord, access_token: str) -> tuple
         "conversation_history": history, "interaction_state_version": session.interaction_state_version + 1,
         "message": reply.tutor_message, "message_voice": reply.tutor_message_voice, **_accepted_turn_identity(turn.source_turn_id),
     })
-    response = _response_from(session.session_id, session.student_id, turn.source_turn_id, "TEACH_BACK_SUBMISSION", None,
+    response = _response_from(session.session_id, session.student_id, turn.source_turn_id, operation.interaction_type, None,
                               session, reply.tutor_message, reply.tutor_message_voice, None, [], None,
                               "WAIT_FOR_STUDENT", 0, "processed", True,
                               operation.original_phase if session.current_phase != operation.original_phase else None)
@@ -4331,10 +4341,6 @@ async def _process_interaction(
 
     if request.interaction_type == "NUDGE_PRESENTED":
         return await _acknowledge_inactivity_nudge(request, session)
-
-    # Teach-back is a real learner explanation. It follows the normal answer
-    # pipeline so it can confirm evidence or receive support; the distinct
-    # request type exists only for UI and audit semantics.
 
     answer_submission: bool = request.interaction_type in {
         "ANSWER_SUBMISSION", "OPTION_SELECTED",

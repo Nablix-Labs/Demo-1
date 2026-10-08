@@ -111,6 +111,8 @@ def upstream(monkeypatch: pytest.MonkeyPatch, teach_session: tuple[str, list[dic
             if payload["tutor_next_action"] == "RETURN_TO_ORIENTATION":
                 response = _event_response("WORKED_EXAMPLE_REQUESTED", str(key))
                 response["phase_payload"]["teach_back"] = {"teach_back_id": content["teach_back_id"], "state": deepcopy(state)}
+                response["phase_payload"]["orientation_bundle"]["target_micro_skill_ids"] = [payload["micro_skill_id"]]
+                response["journey_state"]["phase_1_orientation"]["target_micro_skill_ids"] = [payload["micro_skill_id"]]
         elif kind == "TEACH_BACK_COMPLETED":
             if control["fail_complete"]:
                 control["fail_complete"] = False
@@ -130,6 +132,10 @@ def upstream(monkeypatch: pytest.MonkeyPatch, teach_session: tuple[str, list[dic
             raise AdapterError("student_model", "Simulated lost response")
         return response
 
+    async def forbidden_canvas(request: InteractionRequest) -> None:
+        raise AssertionError("Teach-Back reached the numerical/OCR evidence pipeline.")
+
+    monkeypatch.setattr(interaction_service, "_canvas_evidence_for", forbidden_canvas)
     monkeypatch.setattr(TutorEngineServiceAdapter, "respond_to_teach_back", tutor)
     monkeypatch.setattr(student_model, "post_json", post)
     return control
@@ -199,17 +205,21 @@ def test_completion_recovers_without_recording_or_evaluating_again(upstream: dic
 
 def test_misconceptions_discussion_and_revisit(upstream: dict[str, object]) -> None:
     session_id = upstream["session_id"]
-    for turn, message in (("TURN-001", "An object"), ("TURN-002", "Why?")):
+    understood = client.post("/interaction", json=submission(session_id, "TURN-001", "A number", "TEXT", "TEACH_BACK_SUBMISSION"))
+    assert understood.status_code == 200, understood.text
+    for turn, message in (("TURN-002", "An object"), ("TURN-003", "Why?")):
         response = client.post("/interaction", json=submission(session_id, turn, message, "TEXT", "TEACH_BACK_SUBMISSION"))
         assert response.status_code == 200, response.text
         assert session_service._sessions[session_id].teach_back_content.state.failed_explanation_count == 1
-    second_failure = client.post("/interaction", json=submission(session_id, "TURN-003", "An object", "TEXT", "TEACH_BACK_SUBMISSION"))
+    second_failure = client.post("/interaction", json=submission(session_id, "TURN-004", "An object", "TEXT", "TEACH_BACK_SUBMISSION"))
     assert second_failure.status_code == 200, second_failure.text
     assert second_failure.json()["current_phase"] == "CONCEPT_ORIENTATION"
     revisit = client.post(f"/session/{session_id}/orientation/complete", json={"student_id": "ST001", "completed_video_ids": ["VID-KS3-T02-ORI"], "completed_worked_example_ids": ["WE-KS3-T02-01"]})
     assert revisit.status_code == 200, revisit.text
     assert revisit.json()["current_phase"] == "TEACH_BACK"
     assert session_service._sessions[session_id].teach_back_content.state.failed_explanation_count == 0
+    assert session_service._sessions[session_id].teach_back_content.state.completed_micro_skill_ids == ["T02.M1"]
+    assert session_service._sessions[session_id].teach_back_content.state.current_micro_skill_id == "T02.M2"
 
 
 @pytest.mark.parametrize("discussion_action", ["ASK_TEACH_BACK", "ASK_REEXPLANATION"])
@@ -300,3 +310,22 @@ def test_diagnostic_orientation_and_exact_orientation_retry(teach_session: tuple
     assert orientation.status_code == 200, orientation.text
     assert orientation.json()["current_phase"] == "TEACH_BACK"
     assert "Unknown numbers" in orientation.json()["message"]
+
+
+def test_missing_persisted_reply_keeps_recovery_pending(upstream: dict[str, object], monkeypatch: pytest.MonkeyPatch) -> None:
+    session_id = upstream["session_id"]
+    original_post = student_model.post_json
+
+    async def omit_reply(adapter_name: str, url: str, payload: dict[str, object], headers: dict[str, str], timeout_seconds: int, retry_count: int) -> dict[str, object]:
+        response = await original_post(adapter_name, url, payload, headers, timeout_seconds, retry_count)
+        response["phase_payload"]["teach_back"]["state"]["last_tutor_response"] = None
+        return response
+
+    monkeypatch.setattr(student_model, "post_json", omit_reply)
+    failed = client.post("/interaction", json=submission(session_id, "TURN-001", "A number", "TEXT", "ANSWER_SUBMISSION"))
+    assert failed.status_code == 503, failed.text
+    session = session_service._sessions[session_id]
+    assert session.pending_teach_back is not None
+    assert session.last_processed_turn_id is None
+    assert session.conversation_history == []
+    assert upstream["engine_calls"] == 1

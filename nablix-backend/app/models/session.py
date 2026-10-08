@@ -322,6 +322,7 @@ class PendingTeachBackOperation(BaseModel):
     completion_event: TeachBackCompletedEvent | None = None
     recorded: bool = False
     original_phase: Phase
+    interaction_type: Literal["ANSWER_SUBMISSION", "TEACH_BACK_SUBMISSION"]
 
 
 class TeachBackReceipt(BaseModel):
@@ -348,6 +349,7 @@ class SessionRecord(BaseModel):
     # journey the first one already advanced.
     pending_support_event: GuidedSupportEvent | None = None
     pending_teach_back: PendingTeachBackOperation | None = None
+    # ponytail: receipts live for the session lifetime; prune after defining a replay window.
     teach_back_receipts: dict[str, TeachBackReceipt] = Field(default_factory=dict)
     teach_back_content: TeachBackPayload | None = None
     orientation_events: dict[str, WorkedExampleRequestedEvent | OrientationCompletedEvent] = Field(default_factory=dict)
