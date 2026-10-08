@@ -1,39 +1,34 @@
-# Teach-Back engine handoff
+# Teach-Back integration handoff
 
-Implemented: conceptual evaluation, tutor wording, safety/input-confidence checks, typed output, and validation of permitted actions. The approved prompt is in `nablix-backend/prompts/ai_tutor/phases/teach_back.txt`; messages and the two-failure threshold are in `configs/teach_back_tutor.yaml`.
+Saravanan, the backend orchestration is implemented locally on `deva/teach-back-orchestration`. Student Model still owns learning progress. The current `mathtutor-student` checkout matches `origin/master` at `6a4f0ad`; the remaining contract work below blocks live integration.
 
-## Chirudeva: orchestration
+## Backend behavior
 
-Call `TutorEngineServiceAdapter.respond_to_teach_back(content, student_input, input_source, transcript_confidence, history)`, or the internal `POST /ai-engine/teach-back/respond` endpoint. Its request fields are `content`, `student_input`, `input_source` (`TEXT`/`VOICE`), optional `transcript_confidence`, and `conversation_history`.
+Orientation can enter Teach-Back without guided questions. `journey_state.current_phase` stays `PHASE_1_ORIENTATION`, the payload uses `PHASE_1_TEACH_BACK`, and the backend exposes `TEACH_BACK`. Guided payloads still go directly to Guided Practice.
 
-`content` follows `app/models/teach_back.py`: run/state, targets with authored expected concepts and misconception catalogues, actual teaching summaries, and completed worked examples. Supply the persisted current-skill failure count and completed skills on every call.
+`POST /interaction` accepts `TEACH_BACK_SUBMISSION` or `ANSWER_SUBMISSION`, with text or a final voice transcript and an omitted/null `question_id`. It uses retained authored content and server conversation history. Canvas input is rejected before OCR or state writes. Teach-Back does not grade problems or update their evidence, hints, scores, or mastery.
 
-The reply contains `evaluation`, `tutor_message`, `tutor_message_voice`, and `next_action`. `evaluation.understanding_status` is `UNDERSTOOD`, `MISCONCEPTION`, or null. Error details stay internal. The engine proposes and validates an action; it does not save progress or change phases.
+Each validated reply and exact outgoing event is saved before the mutation. `GET /session/{session_id}?student_id=...` recovers pending work without another engine call. The final understood turn is recorded before `TEACH_BACK_COMPLETED`, which uses the acknowledged journey version. Durable receipts replay accepted turns and reject changed evidence under the same turn ID. Orientation visits have distinct identities and retain their original event envelopes for retries.
 
-| Reply | Orchestration action |
-|---|---|
-| `NEXT_MICRO_SKILL` | Record understanding; advance to the next unfinished target |
-| `MOVE_TO_PHASE_2` | Save the final understood turn, then complete Teach-Back |
-| `ASK_REEXPLANATION` with misconception | Save the first failure; retain the target |
-| `RETURN_TO_ORIENTATION` | Atomically save the second failure and request orientation for that skill |
-| Null verdict | Save the conversation without incrementing failures or marking understanding |
+## Remaining work in Student Model
 
-Branch before numerical question grading. Own pending-event recovery, duplicate/stale-request handling, failure-count persistence, same-run resume after orientation, and final completion recovery. Reset failures after a completed orientation revisit or skill advancement. Preserve understood skills and historical misconceptions. Do not update solving attempts, hints, or mastery from these turns.
+- Persist and return `failed_explanation_count` in `TeachBackRepository.run_state`. The current serializer omits it. Derive it from recorded evaluations: first misconception becomes 1, understanding resets it to 0, and null verdicts leave it unchanged, including null-verdict `ASK_REEXPLANATION`.
+- Accept `RETURN_TO_ORIENTATION` in `TeachBackNextAction`. Record the second misconception and count 2 in the same transaction that returns the failed skill's orientation bundle. Do not require a separate backend content fetch.
+- Return both the orientation bundle and `phase_payload.teach_back` on that response. The state must name the same run/current skill and retain understood skills. The bundle must target only the failed skill.
+- Accept, persist, and return `tutor_response_voice`. Each turn acknowledgement must include `state.last_tutor_response` with the exact `tutor_response`, `tutor_response_voice`, `tutor_next_action`, and `turn_id` sent by the backend. The current handler stores text/action/turn ID, while `run_state` omits the stored reply entirely.
+- Completing the orientation revisit must resume the same run with count 0, the failed skill still current, and understood skills retained. Return full authored Teach-Back content on `SESSION_OPENED`, including the last tutor text/voice. State-only acknowledgements are accepted when this backend session already retains matching content.
+- Preserve request-ID replay before the version check. A replay must return the retained response without inserting another turn. `TEACH_BACK_COMPLETED` must return guided questions after every target is understood.
 
-Use the YAML opening message with the current teaching summary's skill name. Return only tutor wording and public phase/UI state to the student.
+Contract definitions are in `nablix-backend/app/models/student_model_session.py` and `app/models/teach_back.py`. The backend already sends `diagnostic_run_id` and `question_results` with question IDs, usage IDs, and graded results. Student Model selects primary-skill targets; the backend does not duplicate that selection.
 
-## Saravanan: Student Model
+## Verification needed together
 
-Extend `TEACH_BACK_TURN_RECORDED` with `RETURN_TO_ORIENTATION`, `tutor_response_voice`, and `failed_explanation_count`. Persist the count and last tutor reply; validate the count against saved evidence. Return the unresolved skill's orientation bundle atomically, then resume the same Teach-Back run after orientation with count zero and completed skills retained.
+The 41 focused backend checks pass, including 16 orchestration route/recovery cases. They use the repository's simulated Student Model transport and disabled database persistence. They prove orchestration behavior, not a live service or database integration.
 
-Diagnostic completion needs question-level results and a diagnostic run ID. Orientation completion can supply Teach-Back content, guided practice, or a content gap. Missing authored concepts/teaching coverage must stop progression.
+The broad backend run has 1,054 passing tests and 29 failures. A clean `origin/main` checkout reproduces the same 29 failures: 28 RAG/service checks and the existing orientation-opening wording assertion in `test_session_events.py`. There are no new failing test names.
 
-## Manav: frontend
+After the Student Model changes and required migrations are applied to a local test database, run a real integration smoke: diagnostic selection, first failure, second-failure orientation, same-run resume, final completion, refresh/restart, and lost-response replay. Inspect `student_model.teach_back_runs`, `teach_back_results`, `teach_back_turns`, retained event responses, and the backend session snapshot. Confirm one turn per accepted ID, persisted counts/replies, retained understood skills, and unchanged problem attempts/mastery. This smoke remains pending because the current Student Model contract is incomplete. Nothing here is deployment proof.
 
-Render the tutor's text/voice and follow authoritative phase transitions. This phase accepts text and final voice transcripts, with no Canvas, score, attempt counter, or hint ladder. No frontend changes are included here.
+## Manav's frontend dependency
 
-## Verification
-
-Engine checks cover verdicts, both failure stages, discussion/acknowledgements, unclear voice, invalid codes, leaked references, missing content, and service failure. The optional live evaluation is `tests/test_teach_back_openai_smoke.py`, enabled by `NABLIX_RUN_OPENAI_SMOKE=true` and `NABLIX_OPENAI_API_KEY`; it prints replies for conversational review.
-
-Full session recovery and end-to-end checks belong to orchestration/frontend integration. Live conversational quality has not been verified without AI credentials.
+`Numera-ui/lib/teachback/teachApi.ts` still returns scripted turns. `app/teach/TeachBackClient.tsx` supplies a null session ID and canvas input. Replace these with authenticated session/interaction calls, render backend text/voice, and follow the returned phase instead of a fixed turn count. Send a stable `turn_id`, `previous_tutor_turn_id`, `concept_id`, phase, and hint count; voice needs `voice_transcript` and `transcript_final: true`. On a failed mutation, refresh the session before another learning turn. Route mapping already recognizes `TEACH_BACK`. Browser acceptance remains with Manav.

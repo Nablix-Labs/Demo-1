@@ -88,7 +88,7 @@ class InteractionRequest(BaseModel):
     canvas_state: InteractionCanvasState | None = None
     current_phase: Phase
     concept_id: ConceptId
-    question_id: QuestionId
+    question_id: QuestionId | None = None
     hint_count: int
     attempt_count: int | None = Field(default=None, ge=0)
     question_completed: bool | None = None
@@ -140,8 +140,12 @@ class InteractionRequest(BaseModel):
                 "selected_reason_codes is required for, and only for, "
                 "INTERVENTION_INPUT_SUBMITTED."
             )
-        if self.interaction_type == "TEACH_BACK_SUBMISSION" and self.text_input is None:
-            raise ValueError("text_input is required for TEACH_BACK_SUBMISSION.")
+        if self.current_phase != "TEACH_BACK" and self.question_id is None:
+            raise ValueError("question_id is required outside Teach-Back.")
+        if self.interaction_type == "TEACH_BACK_SUBMISSION" and self.current_phase != "TEACH_BACK":
+            raise ValueError("TEACH_BACK_SUBMISSION requires the Teach-Back phase.")
+        if self.current_phase == "TEACH_BACK" and self.input_source == "VOICE" and self.voice_transcript is None:
+            raise ValueError("voice_transcript is required for Teach-Back voice input.")
         if self.interaction_type in system_interactions and self.previous_tutor_turn_id is None:
             raise ValueError(
                 "previous_tutor_turn_id is required for inactivity interactions."

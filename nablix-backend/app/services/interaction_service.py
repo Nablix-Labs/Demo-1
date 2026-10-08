@@ -10,6 +10,12 @@ from uuid import uuid4
 from fastapi import HTTPException
 from pydantic import ValidationError
 
+from app.ai_engine.teach_back import validate_teach_back_reply
+from app.models.session import PendingTeachBackOperation, TeachBackReceipt
+from app.models.teach_back import TeachBackStoredReply
+from app.models.student_model_session import TeachBackTurnRecordedEvent, TeachBackCompletedEvent
+from app.services.session_service import store_teach_back_state, require_teach_back_recovered, _schema_request_id, _schema_timestamp
+
 from app.adapters.base import StudentModelAdapter
 from app.adapters.provider import get_adapters
 from app.ai_engine.classifier import (
@@ -1664,6 +1670,9 @@ async def recover_session_for_read(
     """Recover only pending work; an ordinary GET never selects new questions."""
     async with interaction_lock_for(session_id):
         session = await get_session(session_id, student_id)
+        if session.pending_teach_back is not None:
+            session, _ = await _resume_teach_back(session, access_token)
+            return session
         if session.pending_guided_progression is not None:
             return await resume_guided_progression(session, access_token)
         if session.pending_support_event is not None:
@@ -2535,6 +2544,11 @@ def _duplicate_turn_response(
 ) -> InteractionResponse | None:
     if request.turn_id is None:
         return None
+    receipt = session.teach_back_receipts.get(request.turn_id)
+    if receipt is not None:
+        if receipt.evidence_fingerprint != _request_fingerprint(request):
+            raise HTTPException(status_code=409, detail="turn_id was already accepted with different Teach-Back evidence.")
+        return InteractionResponse.model_validate(receipt.response).model_copy(update={"status": "DUPLICATE_TURN"})
     response = last_interaction_response_for(session.session_id, request.turn_id)
     if response is None and request.turn_id != session.last_processed_turn_id:
         return None
@@ -4015,6 +4029,155 @@ async def _explain_again_interaction_response(
     return await _cache_response(request, response)
 
 
+async def _process_teach_back(request: InteractionRequest, session: SessionRecord, access_token: str) -> InteractionResponse:
+    if request.interaction_type not in {"TEACH_BACK_SUBMISSION", "ANSWER_SUBMISSION"} or request.input_source not in {"TEXT", "VOICE"}:
+        raise HTTPException(status_code=422, detail="Teach-Back accepts text or final voice answer submissions.")
+    if request.canvas_state is not None or request.canvas_snapshot_id is not None:
+        raise HTTPException(status_code=422, detail="Teach-Back does not accept canvas evidence.")
+    content = session.teach_back_content
+    event = session.student_model_event
+    if content is None or event is None or content.state.current_micro_skill_id is None:
+        raise HTTPException(status_code=503, detail="The active Teach-Back context is missing.")
+    student_input = request.voice_transcript if request.input_source == "VOICE" else request.text_input
+    if student_input is None:
+        raise HTTPException(status_code=422, detail="Teach-Back requires student text or a final voice transcript.")
+    reply = await get_adapters().tutor.respond_to_teach_back(content, student_input, request.input_source,
+                                                           request.transcript_confidence, session.conversation_history)
+    validate_teach_back_reply(content, reply)
+    turn_event = TeachBackTurnRecordedEvent(
+        request_id=_schema_request_id(session, request.turn_id, "TEACH_BACK_TURN_RECORDED"),
+        event_type="TEACH_BACK_TURN_RECORDED", source_turn_id=request.turn_id,
+        expected_journey_version=event.journey_state.version, topic_id=event.journey_state.topic_id,
+        student_id=session.student_id, timestamp=_schema_timestamp(), teach_back_id=content.teach_back_id,
+        micro_skill_id=content.state.current_micro_skill_id, input_source=request.input_source,
+        student_response=student_input, evaluation=reply.evaluation, tutor_response=reply.tutor_message,
+        tutor_response_voice=reply.tutor_message_voice, tutor_next_action=reply.next_action,
+    )
+    operation = PendingTeachBackOperation(reply=reply, evidence_fingerprint=_request_fingerprint(request),
+                                         turn_event=turn_event, original_phase=session.current_phase, interaction_type=request.interaction_type)
+    session = await store_teach_back_state(session.model_copy(update={"pending_teach_back": operation}))
+    session, response = await _resume_teach_back(session, access_token)
+    return await _cache_response(request, response)
+
+
+async def _refresh_teach_back_conflict(session: SessionRecord, access_token: str) -> None:
+    """Rebase a refused event only when its validated explanation is still current."""
+    operation = session.pending_teach_back
+    previous = session.teach_back_content
+    if operation is None or previous is None:
+        raise RuntimeError("Teach-Back conflict has no pending operation or content.")
+    event = await get_adapters().student_model.send_session_event(SessionOpenedEvent(
+        request_id=f"{session.session_id}:TEACH-BACK-REFRESH-{uuid4()}", event_type="SESSION_OPENED",
+        topic_id=operation.turn_event.topic_id, student_id=session.student_id, timestamp=_schema_timestamp(),
+    ), access_token)
+    restored = await _apply_schema_event(session, event)
+    content = restored.teach_back_content
+    version = event.journey_state.version
+    if operation.recorded and restored.current_phase == "GUIDED_PRACTICE":
+        operation = operation.model_copy(update={"completion_event": None})
+    elif restored.current_phase == "TEACH_BACK" and content is not None and content.teach_back_id == previous.teach_back_id:
+        if operation.recorded and operation.completion_event is not None:
+            operation = operation.model_copy(update={"completion_event": operation.completion_event.model_copy(update={"expected_journey_version": version})})
+        elif (content.state.current_micro_skill_id == previous.state.current_micro_skill_id
+              and content.state.failed_explanation_count == previous.state.failed_explanation_count
+              and content.state.completed_micro_skill_ids == previous.state.completed_micro_skill_ids):
+            operation = operation.model_copy(update={"turn_event": operation.turn_event.model_copy(update={"expected_journey_version": version})})
+        else:
+            operation = None
+    else:
+        operation = None
+    await store_teach_back_state(restored.model_copy(update={"pending_teach_back": operation}))
+
+
+async def _resume_teach_back(session: SessionRecord, access_token: str) -> tuple[SessionRecord, InteractionResponse]:
+    operation = session.pending_teach_back
+    if operation is None:
+        raise RuntimeError("No Teach-Back operation is pending.")
+    turn = operation.turn_event
+    reply = operation.reply
+    if not operation.recorded:
+        try:
+            event = await get_adapters().student_model.send_session_event(turn, access_token)
+        except JourneyVersionConflict:
+            await _refresh_teach_back_conflict(session, access_token)
+            raise
+        payload = event.phase_payload
+        acknowledged = payload.teach_back if payload is not None else None
+        expected_reply = TeachBackStoredReply(
+            tutor_response=reply.tutor_message, tutor_response_voice=reply.tutor_message_voice,
+            tutor_next_action=reply.next_action, turn_id=turn.source_turn_id,
+        )
+        if (acknowledged is None or acknowledged.teach_back_id != turn.teach_back_id
+                or acknowledged.state.teach_back_id != turn.teach_back_id
+                or acknowledged.state.status != "IN_PROGRESS"
+                or acknowledged.state.target_micro_skill_ids != session.teach_back_content.state.target_micro_skill_ids
+                or acknowledged.state.last_tutor_response != expected_reply):
+            raise HTTPException(status_code=503, detail="Student Model omitted or changed the persisted Teach-Back turn and reply.")
+        if reply.next_action == "RETURN_TO_ORIENTATION":
+            if payload is None or payload.phase != "PHASE_1_ORIENTATION" or payload.orientation_bundle is None or not payload.orientation_bundle.delivery_sequence:
+                raise HTTPException(status_code=503, detail="Student Model must atomically return the failed skill orientation bundle.")
+            acknowledged = payload.teach_back
+            if acknowledged is None or acknowledged.teach_back_id != turn.teach_back_id or acknowledged.state.failed_explanation_count != 2:
+                raise HTTPException(status_code=503, detail="Student Model must persist the second Teach-Back failure with the orientation return.")
+            previous = session.teach_back_content.state
+            if acknowledged.state.current_micro_skill_id != turn.micro_skill_id or acknowledged.state.completed_micro_skill_ids != previous.completed_micro_skill_ids:
+                raise HTTPException(status_code=503, detail="Orientation return discarded Teach-Back progress.")
+            session = session.model_copy(update={"teach_back_content": session.teach_back_content.model_copy(update={"state": acknowledged.state})})
+            if payload.orientation_bundle.target_micro_skill_ids != [turn.micro_skill_id]:
+                raise HTTPException(status_code=503, detail="Student Model returned orientation for a different Teach-Back target.")
+        else:
+            if payload is None or payload.phase != "PHASE_1_TEACH_BACK" or payload.teach_back is None:
+                raise HTTPException(status_code=503, detail="Student Model omitted the acknowledged Teach-Back state.")
+            state = payload.teach_back.state
+            previous = session.teach_back_content.state
+            expected_count = 0 if reply.evaluation.understanding_status == "UNDERSTOOD" else previous.failed_explanation_count + (1 if reply.evaluation.understanding_status == "MISCONCEPTION" else 0)
+            expected_completed = set(previous.completed_micro_skill_ids) | ({turn.micro_skill_id} if reply.evaluation.understanding_status == "UNDERSTOOD" else set())
+            if state.failed_explanation_count != expected_count or set(state.completed_micro_skill_ids) != expected_completed:
+                raise HTTPException(status_code=503, detail="Student Model acknowledged inconsistent Teach-Back progress.")
+            if reply.evaluation.understanding_status != "UNDERSTOOD" and state.current_micro_skill_id != turn.micro_skill_id:
+                raise HTTPException(status_code=503, detail="Student Model changed the target of an unfinished explanation.")
+        completion = None
+        if reply.next_action == "MOVE_TO_PHASE_2":
+            completion = TeachBackCompletedEvent(
+                request_id=_schema_request_id(session, turn.source_turn_id, "TEACH_BACK_COMPLETED"),
+                event_type="TEACH_BACK_COMPLETED", source_turn_id=turn.source_turn_id,
+                expected_journey_version=event.journey_state.version, topic_id=turn.topic_id,
+                student_id=turn.student_id, timestamp=_schema_timestamp(), teach_back_id=turn.teach_back_id,
+            )
+        operation = operation.model_copy(update={"recorded": True, "completion_event": completion})
+        session = await _apply_schema_event(session.model_copy(update={"pending_teach_back": operation}), event)
+    if operation.completion_event is not None:
+        try:
+            event = await get_adapters().student_model.send_session_event(operation.completion_event, access_token)
+        except JourneyVersionConflict:
+            await _refresh_teach_back_conflict(session, access_token)
+            raise
+        payload = event.phase_payload
+        if payload is None or payload.phase != "PHASE_2_GUIDED_LEARNING" or payload.question_set is None or not payload.question_set.questions:
+            raise HTTPException(status_code=503, detail="Student Model returned no guided content after Teach-Back completion.")
+        session = await _apply_schema_event(session, event)
+    content = session.teach_back_content
+    if content is None:
+        raise RuntimeError("Teach-Back recovery lost its retained content.")
+    stored_reply = TeachBackStoredReply(tutor_response=reply.tutor_message, tutor_response_voice=reply.tutor_message_voice,
+                                       tutor_next_action=reply.next_action, turn_id=turn.source_turn_id)
+    content = content.model_copy(update={"state": content.state.model_copy(update={"last_tutor_response": stored_reply})})
+    history = _updated_conversation_history(session.conversation_history, turn.student_response, reply.tutor_message,
+                                           load_classifier_rules().conversation_rules.max_recent_messages)
+    session = session.model_copy(update={
+        "pending_teach_back": None, "teach_back_content": content,
+        "conversation_history": history, "interaction_state_version": session.interaction_state_version + 1,
+        "message": reply.tutor_message, "message_voice": reply.tutor_message_voice, **_accepted_turn_identity(turn.source_turn_id),
+    })
+    response = _response_from(session.session_id, session.student_id, turn.source_turn_id, operation.interaction_type, None,
+                              session, reply.tutor_message, reply.tutor_message_voice, None, [], None,
+                              "WAIT_FOR_STUDENT", 0, "processed", True,
+                              operation.original_phase if session.current_phase != operation.original_phase else None)
+    receipt = TeachBackReceipt(evidence_fingerprint=operation.evidence_fingerprint, response=response.model_dump(mode="json"))
+    session = await store_teach_back_state(session.model_copy(update={"teach_back_receipts": {**session.teach_back_receipts, turn.source_turn_id: receipt}}))
+    return session, response
+
+
 async def _process_interaction(
 
     request: InteractionRequest,
@@ -4074,6 +4237,14 @@ async def _process_interaction(
     require_learning_active(session)
     if _turn_is_stale(request, session):
         return _stale_turn_response(session)
+
+    require_teach_back_recovered(session)
+    if session.current_phase == "TEACH_BACK":
+        return await _process_teach_back(request, session, access_token)
+    if request.interaction_type == "TEACH_BACK_SUBMISSION":
+        raise HTTPException(status_code=409, detail="The authoritative session is outside Teach-Back.")
+    if request.current_phase == "TEACH_BACK":
+        raise HTTPException(status_code=409, detail="The authoritative session is outside Teach-Back.")
 
     if session.current_phase == "INDEPENDENT_PRACTICE":
         if request.interaction_type == "CLARIFICATION_REQUEST":
@@ -4170,12 +4341,6 @@ async def _process_interaction(
 
     if request.interaction_type == "NUDGE_PRESENTED":
         return await _acknowledge_inactivity_nudge(request, session)
-
-    # Teach-back is a real learner explanation. It follows the normal answer
-    # pipeline so it can confirm evidence or receive support; the distinct
-    # request type exists only for UI and audit semantics.
-    if request.interaction_type == "TEACH_BACK_SUBMISSION":
-        request = request.model_copy(update={"interaction_type": "ANSWER_SUBMISSION"})
 
     answer_submission: bool = request.interaction_type in {
         "ANSWER_SUBMISSION", "OPTION_SELECTED",

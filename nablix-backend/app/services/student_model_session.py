@@ -3,12 +3,13 @@ from app.models.fields import Phase
 from app.models.student_model_session import (
     JourneyPhaseState,
     StudentModelCoreState,
-    StudentModelPhase,
+    StudentModelPayloadPhase,
     StudentModelSessionEventResponse,
 )
 
 
-PHASE_FROM_STUDENT_MODEL: dict[StudentModelPhase, Phase] = {
+PHASE_FROM_STUDENT_MODEL: dict[StudentModelPayloadPhase, Phase] = {
+    "PHASE_1_TEACH_BACK": "TEACH_BACK",
     "PHASE_0_DIAGNOSTIC": "DIAGNOSTIC",
     "PHASE_1_ORIENTATION": "CONCEPT_ORIENTATION",
     "PHASE_2_GUIDED_LEARNING": "GUIDED_PRACTICE",

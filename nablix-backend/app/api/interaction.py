@@ -27,6 +27,7 @@ async def interaction_endpoint(
     if (
         request.input_source == "VOICE"
         and request.interaction_type == "ANSWER_SUBMISSION"
+        and request.current_phase != "TEACH_BACK"
         and request.canvas_state is None
     ):
         raise HTTPException(
