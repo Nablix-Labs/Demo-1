@@ -1481,7 +1481,7 @@ export interface InteractionPayload {
   nudge_id?: string;
   current_phase: string;
   concept_id: string;
-  question_id: string;
+  question_id: string | null;
   hint_count: number;
   // Voice turn-sync contract (§3, §5). Optional so the request still works before
   // the backend adds these fields.

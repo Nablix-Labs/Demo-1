@@ -1,7 +1,12 @@
 from fastapi import APIRouter, HTTPException, WebSocket
+from fastapi.responses import JSONResponse
 
 from app.api.auth import AccessToken
-from app.models.interaction import InteractionResponse
+from app.models.interaction import InteractionResponse, StaleTurnResponse
+from app.models.teach_back_realtime import TeachBackRealtimeContext, TeachBackRealtimeResult, TeachBackRealtimeSession, TeachBackRealtimeStart
+from app.ai_engine.teach_back import load_teach_back_config
+from app.services.teach_back_realtime import realtime_teach_back_context, start_realtime_teach_back
+from app.services.interaction_service import process_realtime_teach_back
 from app.models.voice import (
     VoiceRequest,
     VoiceResponse,
@@ -76,3 +81,34 @@ async def voice_stream_endpoint(
         tts_provider=tts_provider,
         tts_voice=tts_voice,
     )
+
+
+@router.get("/teach-back/options")
+async def teach_back_voice_options() -> dict[str, bool]:
+    return {"realtime_enabled": load_teach_back_config().realtime.enabled}
+
+
+@router.post("/teach-back/session", response_model=TeachBackRealtimeSession)
+async def teach_back_realtime_session(
+    request: TeachBackRealtimeStart, access_token: AccessToken,
+) -> TeachBackRealtimeSession:
+    return await start_realtime_teach_back(request, access_token)
+
+
+@router.post("/teach-back/context", response_model=TeachBackRealtimeContext)
+async def teach_back_realtime_context(
+    request: TeachBackRealtimeStart, access_token: AccessToken,
+) -> TeachBackRealtimeContext:
+    return await realtime_teach_back_context(request, access_token)
+
+
+@router.post("/teach-back/result", response_model=InteractionResponse)
+async def teach_back_realtime_result(
+    request: TeachBackRealtimeResult, access_token: AccessToken,
+) -> InteractionResponse | JSONResponse:
+    if not load_teach_back_config().realtime.enabled:
+        raise HTTPException(status_code=409, detail="Realtime Teach-Back is disabled.")
+    response = await process_realtime_teach_back(request, access_token)
+    if isinstance(response, StaleTurnResponse):
+        return JSONResponse(status_code=409, content=response.model_dump())
+    return response

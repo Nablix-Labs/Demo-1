@@ -10,9 +10,10 @@ from uuid import uuid4
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from app.ai_engine.teach_back import validate_teach_back_reply
+from app.ai_engine.teach_back import teach_back_input_reply, validate_teach_back_content, validate_teach_back_reply
 from app.models.session import PendingTeachBackOperation, TeachBackReceipt
-from app.models.teach_back import TeachBackStoredReply
+from app.models.teach_back import TeachBackReply, TeachBackStoredReply
+from app.models.teach_back_realtime import TeachBackRealtimeResult
 from app.models.student_model_session import TeachBackTurnRecordedEvent, TeachBackCompletedEvent
 from app.services.session_service import store_teach_back_state, require_teach_back_recovered, _schema_request_id, _schema_timestamp
 
@@ -4043,7 +4044,21 @@ async def _process_teach_back(request: InteractionRequest, session: SessionRecor
         raise HTTPException(status_code=422, detail="Teach-Back requires student text or a final voice transcript.")
     reply = await get_adapters().tutor.respond_to_teach_back(content, student_input, request.input_source,
                                                            request.transcript_confidence, session.conversation_history)
-    validate_teach_back_reply(content, reply)
+    return await _record_teach_back_reply(request, session, access_token, reply)
+
+
+async def _record_teach_back_reply(
+    request: InteractionRequest, session: SessionRecord, access_token: str, reply: TeachBackReply,
+) -> InteractionResponse:
+    content = session.teach_back_content
+    event = session.student_model_event
+    student_input = request.voice_transcript if request.input_source == "VOICE" else request.text_input
+    if content is None or event is None or student_input is None:
+        raise HTTPException(status_code=503, detail="Teach-Back context or student evidence is missing.")
+    try:
+        validate_teach_back_reply(content, reply)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     turn_event = TeachBackTurnRecordedEvent(
         request_id=_schema_request_id(session, request.turn_id, "TEACH_BACK_TURN_RECORDED"),
         event_type="TEACH_BACK_TURN_RECORDED", source_turn_id=request.turn_id,
@@ -4058,6 +4073,44 @@ async def _process_teach_back(request: InteractionRequest, session: SessionRecor
     session = await store_teach_back_state(session.model_copy(update={"pending_teach_back": operation}))
     session, response = await _resume_teach_back(session, access_token)
     return await _cache_response(request, response)
+
+
+async def process_realtime_teach_back(
+    result: TeachBackRealtimeResult, access_token: str,
+) -> InteractionResponse | StaleTurnResponse:
+    """Record a Realtime tool reply using the existing rules and durable event flow."""
+    request = result.interaction
+    if (request.current_phase != "TEACH_BACK"
+            or request.interaction_type != "TEACH_BACK_SUBMISSION"
+            or request.input_source not in {"TEXT", "VOICE"}
+            or request.canvas_state is not None or request.canvas_snapshot_id is not None):
+        raise HTTPException(status_code=422, detail="Realtime results require a text or voice Teach-Back submission without canvas.")
+    async with interaction_lock_for(request.session_id):
+        session = _get_owned_session_for_turn(request.session_id, request.student_id, request.current_phase, request.hint_count)
+        duplicate = _duplicate_turn_response(request, session)
+        if duplicate is not None:
+            return duplicate
+        require_learning_active(session)
+        if _turn_is_stale(request, session):
+            return _stale_turn_response(session)
+        require_teach_back_recovered(session)
+        content = session.teach_back_content
+        if (session.current_phase != "TEACH_BACK" or content is None
+                or result.teach_back_id != content.teach_back_id
+                or result.micro_skill_id != content.state.current_micro_skill_id):
+            raise HTTPException(status_code=409, detail="Realtime result belongs to an inactive Teach-Back target.")
+        validate_teach_back_content(content)
+        student_input = request.voice_transcript if request.input_source == "VOICE" else request.text_input
+        if student_input is None:
+            raise HTTPException(status_code=422, detail="A final student transcript or text is required.")
+        reply = teach_back_input_reply(student_input, request.input_source, request.transcript_confidence)
+        if reply is None:
+            reply = result.reply
+        try:
+            return await _record_teach_back_reply(request, session, access_token, reply)
+        except JourneyVersionConflict as conflict:
+            await reconcile_journey_conflict(request.session_id, request.student_id, conflict)
+            raise
 
 
 async def _refresh_teach_back_conflict(session: SessionRecord, access_token: str) -> None:
