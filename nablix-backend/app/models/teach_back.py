@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.models.student_model_session import WorkedExample
+from app.models.worked_example import WorkedExample
 
 
 TeachBackAction = Literal[

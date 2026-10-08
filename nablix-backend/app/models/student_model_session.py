@@ -3,6 +3,8 @@ from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.models.worked_example import WorkedExample, WorkedExampleStep
+from app.models.teach_back import TeachBackAction, TeachBackEvaluation, TeachBackPayload, TeachBackState
 from app.models.guided_learning import GuidedComparisonRow
 from app.models.remediation import (
     InterventionFeedback,
@@ -20,6 +22,14 @@ StudentModelPhase = Literal[
     "PHASE_3_INDEPENDENT_PRACTICE",
     "REVIEW",
 ]
+StudentModelPayloadPhase = StudentModelPhase | Literal["PHASE_1_TEACH_BACK"]
+
+
+class TeachBackStatePayload(BaseModel):
+    teach_back_id: str
+    state: TeachBackState
+
+
 DiagnosticResult = Literal["CORRECT", "INCORRECT"]
 SupportUsed = Literal[
     "NONE",
@@ -131,24 +141,6 @@ class OrientationVideo(BaseModel):
     duration_seconds: int | None
 
 
-class WorkedExampleStep(BaseModel):
-    step_id: str
-    sequence_no: int
-    screen_content: str | None
-    narration_text: str | None
-    must_show: str | None
-    must_not_show: str | None
-
-
-class WorkedExample(BaseModel):
-    worked_example_id: str
-    title: str
-    covered_micro_skill_ids: list[str]
-    final_answer: str | None
-    student_answer_required: bool
-    steps: list[WorkedExampleStep]
-
-
 class OrientationDeliveryItem(BaseModel):
     sequence_no: int
     content_type: Literal["ORIENTATION_VIDEO", "WORKED_EXAMPLE"]
@@ -190,7 +182,8 @@ class PrerequisiteRemediationBundle(BaseModel):
 
 
 class StudentModelPhasePayload(BaseModel):
-    phase: StudentModelPhase
+    phase: StudentModelPayloadPhase
+    teach_back: TeachBackPayload | TeachBackStatePayload | None = None
     payload_type: str
     question_set: QuestionSet | None = None
     # Derived by the tutor backend, not sent upstream: see
@@ -335,7 +328,7 @@ class PublicQuestionSet(BaseModel):
 class PublicStudentModelPhasePayload(BaseModel):
     model_config = ConfigDict(from_attributes=True, extra="forbid")
 
-    phase: StudentModelPhase
+    phase: StudentModelPayloadPhase
     payload_type: str
     question_set: PublicQuestionSet | None = None
     orientation_bundle: OrientationBundle | PrerequisiteRemediationBundle | None = None
@@ -419,9 +412,17 @@ class MicroSkillResult(BaseModel):
     result: DiagnosticResult
 
 
+class DiagnosticQuestionResult(BaseModel):
+    question_id: str
+    question_usage_id: str | None
+    result: DiagnosticResult
+
+
 class DiagnosticCompletedEvent(MutatingSessionEventBase):
     event_type: Literal["DIAGNOSTIC_COMPLETED"]
     micro_skill_results: list[MicroSkillResult]
+    diagnostic_run_id: str | None = None
+    question_results: list[DiagnosticQuestionResult] = Field(default_factory=list)
 
 
 class WorkedExampleRequestedEvent(MutatingSessionEventBase):
@@ -432,6 +433,23 @@ class WorkedExampleRequestedEvent(MutatingSessionEventBase):
 class OrientationCompletedEvent(MutatingSessionEventBase):
     event_type: Literal["ORIENTATION_COMPLETED"]
     target_micro_skill_ids: list[str]
+
+
+class TeachBackTurnRecordedEvent(MutatingSessionEventBase):
+    event_type: Literal["TEACH_BACK_TURN_RECORDED"]
+    teach_back_id: str
+    micro_skill_id: str
+    input_source: Literal["TEXT", "VOICE"]
+    student_response: str
+    evaluation: TeachBackEvaluation
+    tutor_response: str
+    tutor_response_voice: str
+    tutor_next_action: TeachBackAction
+
+
+class TeachBackCompletedEvent(MutatingSessionEventBase):
+    event_type: Literal["TEACH_BACK_COMPLETED"]
+    teach_back_id: str
 
 
 class GuidedAttemptEvent(MutatingSessionEventBase):
@@ -587,6 +605,8 @@ StudentModelSessionEvent: TypeAlias = (
     | DiagnosticCompletedEvent
     | WorkedExampleRequestedEvent
     | OrientationCompletedEvent
+    | TeachBackTurnRecordedEvent
+    | TeachBackCompletedEvent
     | GuidedAttemptEvent
     | GuidedSupportEvent
     | GuidedPhaseCompletedEvent
