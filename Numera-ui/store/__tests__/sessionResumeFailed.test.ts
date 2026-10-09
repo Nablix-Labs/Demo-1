@@ -30,8 +30,9 @@ describe('sessionResumeFailed', () => {
     const giveUp = hook.indexOf('session resume failed (will stay on the stored session)');
     expect(giveUp).toBeGreaterThan(-1);
     expect(hook.slice(giveUp, giveUp + 400)).toMatch(/setSessionResumeFailed\(true\)/);
-    // Cleared before the record is stored; other set-up may sit between.
-    expect(hook).toMatch(/s\.setSessionResumeFailed\(false\);[\s\S]{0,600}?s\.setBackendSession\(rec\)/);
+    // Cleared before the record is stored (directly, or via adoptSessionRecord);
+    // other set-up may sit between.
+    expect(hook).toMatch(/s\.setSessionResumeFailed\(false\);[\s\S]{0,600}?(s\.setBackendSession\(rec\)|adoptSessionRecord\(rec\))/);
   });
 
   it('takes the lesson page to the unavailable screen with a retry that re-reads', () => {

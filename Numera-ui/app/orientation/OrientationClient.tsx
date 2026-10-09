@@ -662,6 +662,11 @@ function BackendOrientation({ topicId }: { topicId: string }) {
       if (sessionId) {
         await resumeSession();
       }
+      // The backend has moved on to Teach-Back (journey_state still says
+      // orientation, so a landing route can bring a student here). Starting
+      // orientation would 409 and flash an error; the phase router is already
+      // taking them to /teach.
+      if (useNumeraStore.getState().currentPhase === 'TEACH_BACK') return;
       const currentSessionId = useNumeraStore.getState().sessionId;
       // No session yet AND a local mock topic id (algebra / number / geometry):
       // starting one would be rejected as UNKNOWN_TOPIC. Links from the mock

@@ -572,6 +572,11 @@ export interface SessionRecord {
   canvas_state: CanvasState;
   ui_state: string;
   message: string;
+  /**
+   * The spoken form of `message`. Teach-Back opens with it after orientation
+   * (backend SessionRecord.message_voice); absent on older records.
+   */
+  message_voice?: string;
   conversation_history?: Array<{
     role: 'user' | 'assistant' | 'system';
     content: string;
@@ -1861,7 +1866,9 @@ export async function sendInteraction(payload: InteractionPayload): Promise<Inte
   interactionSentListeners.forEach((listener) => listener());
   const deferred = { ...payload, defer_canvas_teaching_plan: true };
   try {
-    const res = payload.interaction_type === 'ANSWER_SUBMISSION'
+    // A Teach-Back turn is one AI evaluation plus two Student Model events —
+    // as slow as a graded answer, so it gets the same budget.
+    const res = payload.interaction_type === 'ANSWER_SUBMISSION' || payload.interaction_type === 'TEACH_BACK_SUBMISSION'
       ? await api.post<InteractionResponse>('/interaction', deferred, { timeout: SUBMISSION_TIMEOUT_MS })
       : await api.post<InteractionResponse>('/interaction', deferred);
     return res.data;
