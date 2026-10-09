@@ -1,11 +1,14 @@
 import asyncio
+import json
 from copy import deepcopy
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from app.adapters.tutor_engine import TutorEngineServiceAdapter
 from app.ai_engine import teach_back
+from app.ai_engine.openai_client import OpenAIAIEngineClient
 from app.core.config import Settings
 from app.core.exceptions import AdapterError
 from app.main import app
@@ -125,3 +128,61 @@ def test_service_failure_is_not_converted_to_progress(monkeypatch):
     monkeypatch.setattr(teach_back, "build_openai_ai_engine_client", lambda settings: None)
     with pytest.raises(AdapterError, match="API key"):
         teach_back.generate_teach_back_reply(TeachBackPayload.model_validate(teach_back_content()), "Explain", "TEXT", None, [])
+
+
+def test_retry_accepts_a_corrected_question_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
+    requests: list[dict[str, object]] = []
+    settings = Settings(use_openai_ai_engine=True, openai_api_key="test-key", adapter_request_retry_count=1)
+    monkeypatch.setattr(teach_back, "get_settings", lambda: settings)
+
+    def post(self: OpenAIAIEngineClient, request_body: dict[str, object]) -> tuple[httpx.Response, float]:
+        requests.append(request_body)
+        verdict = "UNDERSTOOD" if len(requests) == 1 else None
+        action = "NEXT_MICRO_SKILL" if len(requests) == 1 else "DISCUSS_AND_CLARIFY"
+        message = "Letters represent numbers." if len(requests) == 1 else "A letter represents an unknown number. What does it represent?"
+        reply = TeachBackReply(
+            evaluation=TeachBackEvaluation(understanding_status=verdict, misconception_detected=False,
+                                          error_code=None, unmapped_misconception_description=None),
+            next_action=action, tutor_message=message, tutor_message_voice=message,
+        )
+        return httpx.Response(200, json={"output_text": reply.model_dump_json()}), 1.0
+
+    monkeypatch.setattr(OpenAIAIEngineClient, "_post_with_retries", post)
+    response = TestClient(app).post("/ai-engine/teach-back/respond", json={
+        "content": teach_back_content(), "student_input": "Why do we use a letter?", "input_source": "TEXT",
+        "transcript_confidence": None, "conversation_history": [],
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()["evaluation"]["understanding_status"] is None
+    assert response.json()["next_action"] == "DISCUSS_AND_CLARIFY"
+    assert len(requests) == 2
+    retry_schema = requests[1]["text"]["format"]["schema"]
+    assert "DISCUSS_AND_CLARIFY" in retry_schema["properties"]["next_action"]["enum"]
+    assert "required_response_action" not in json.dumps(requests[1]["input"])
+
+
+@pytest.mark.parametrize("voice_message", ["Private skill T02.M1 is complete. What next?", ""])
+def test_rejected_replies_are_not_exposed_in_api_errors(monkeypatch: pytest.MonkeyPatch, voice_message: str) -> None:
+    settings = Settings(use_openai_ai_engine=True, openai_api_key="test-key", adapter_request_retry_count=1)
+    monkeypatch.setattr(teach_back, "get_settings", lambda: settings)
+    requests: list[dict[str, object]] = []
+
+    def post(self: OpenAIAIEngineClient, request_body: dict[str, object]) -> tuple[httpx.Response, float]:
+        requests.append(request_body)
+        return httpx.Response(200, json={"output_text": json.dumps({
+            "evaluation": {"understanding_status": "UNDERSTOOD", "misconception_detected": False,
+                           "error_code": None, "unmapped_misconception_description": None},
+            "next_action": "NEXT_MICRO_SKILL", "tutor_message": "Private skill T02.M1 is complete. What next?",
+            "tutor_message_voice": voice_message,
+        })}), 1.0
+
+    monkeypatch.setattr(OpenAIAIEngineClient, "_post_with_retries", post)
+    response = TestClient(app).post("/ai-engine/teach-back/respond", json={
+        "content": teach_back_content(), "student_input": "A letter represents a number.", "input_source": "TEXT",
+        "transcript_confidence": None, "conversation_history": [],
+    })
+    assert response.status_code == 503
+    assert len(requests) == 2
+    assert response.json()["message"] == teach_back.load_teach_back_config().invalid_response_message
+    assert "T02.M1" not in response.text
+    assert "tutor_message" not in response.text

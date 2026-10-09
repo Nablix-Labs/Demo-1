@@ -4,6 +4,7 @@ return_to_orientation_message: "Let's revisit this idea together, then you can t
 voice_clarification_message: "I didn't catch that clearly. Could you say the idea again?"
 acknowledgement_message: "Tell me the idea in your own words, as if I'm learning it from you."
 completion_message: "You've explained the ideas we needed. Let's use them in some problems."
+invalid_response_message: "The tutor could not produce a valid Teach-Back reply. Please try again."
 non_explanation_patterns:
   - '(?:(?:okay|ok|yes|right)[, ]+)?(?:please )?next(?: (?:tell me|please|one|concept))?[.!?, ]*'
   - '(?:i am|i\x27m|im) ready(?: for (?:the )?next(?: one|concept)?)?[.!?, ]*'

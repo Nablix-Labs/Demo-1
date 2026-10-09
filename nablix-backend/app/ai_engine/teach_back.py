@@ -41,6 +41,7 @@ class TeachBackConfig(BaseModel):
     voice_clarification_message: str
     acknowledgement_message: str
     completion_message: str
+    invalid_response_message: str
     forbidden_student_text_patterns: list[str]
     non_explanation_patterns: list[str]
 
@@ -197,13 +198,8 @@ def generate_teach_back_reply(
             return reply
         except (ValidationError, ValueError) as error:
             if attempt == settings.adapter_request_retry_count:
-                raise AdapterError("teach_back", f"Invalid Teach-Back response: {error}; response={raw_reply}") from error
+                logger.error("teach_back_response_invalid", extra={"attempt": attempt + 1, "reason": str(error), "response": raw_reply})
+                raise AdapterError("teach_back", load_teach_back_config().invalid_response_message) from error
             logger.warning("teach_back_response_retry", extra={"attempt": attempt + 1, "reason": str(error), "response": raw_reply})
             context = {**context, "response_validation_error": str(error)}
-            try:
-                evaluation = TeachBackEvaluation.model_validate(raw_reply.get("evaluation"))
-            except ValidationError:
-                continue
-            if evaluation.understanding_status is not None:
-                context = {**context, "required_response_action": teach_back_action(content, evaluation.understanding_status)}
     raise AdapterError("teach_back", "Teach-Back response retry count must be nonnegative.")

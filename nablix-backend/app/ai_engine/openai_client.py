@@ -1135,9 +1135,6 @@ class OpenAIAIEngineClient:
             *context["discussion_actions"], *required_actions.values(),
         ]))
         response_schema["properties"]["next_action"]["description"] = json.dumps(required_actions)
-        response_action = context.get("required_response_action")
-        if isinstance(response_action, str):
-            response_schema["properties"]["next_action"]["enum"] = [response_action]
         if context.get("input_requires_clarification") is True:
             response_schema["$defs"]["TeachBackEvaluation"]["properties"]["understanding_status"] = {"type": "null"}
         return self._request_json(
