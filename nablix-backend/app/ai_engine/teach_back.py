@@ -48,7 +48,6 @@ class TeachBackConfig(BaseModel):
     curious_student_pattern: str
     grading_phrases: list[str]
     clear_question_pattern: str
-    clear_question_answer_keywords: dict[str, list[str]]
     unclear_question_phrases: list[str]
     evaluation_instructions: str
 
@@ -163,15 +162,14 @@ def validate_teach_back_wording(reply: TeachBackReply, student_input: str) -> No
             raise ValueError("Both Teach-Back messages must speak as a curious learner: use I, me or my, such as 'Can you teach me...?' or 'I follow...'.")
         if any(phrase.casefold() in wording.casefold() for phrase in config.grading_phrases):
             raise ValueError("Teach-Back must reflect understanding as a learner, without grading or teacher praise.")
-        if re.search(config.clear_question_pattern, student_input, re.IGNORECASE) and any(
+        if re.search(config.clear_question_pattern, student_input.strip(), re.IGNORECASE) and any(
             phrase.casefold() in wording.casefold() for phrase in config.unclear_question_phrases
         ):
             raise ValueError("The student asked a clear question. Answer it directly; do not pretend their speech was unclear or say I couldn't follow. Keep the curious-student voice.")
-        question_key = next((key for key in config.clear_question_answer_keywords if key.casefold() in student_input.casefold()), None)
-        if question_key is not None:
-            answer = wording.split("?", 1)[0].casefold()
-            if not any(keyword.casefold() in answer for keyword in config.clear_question_answer_keywords[question_key]):
-                raise ValueError("Answer the student's clear question before asking the curious-student follow-up.")
+        if re.search(config.clear_question_pattern, student_input.strip(), re.IGNORECASE):
+            first_sentence = re.search(r"[^.!?]+[.!?]", wording)
+            if first_sentence is None or first_sentence[0].endswith("?"):
+                raise ValueError("Answer this clear conceptual question first with a declarative sentence based on the supplied concept or worked example, using I or me. Then ask at most one curious-student follow-up. Do not ask the student to answer their own question.")
 
 
 def evaluate_teach_back_answer(content: TeachBackPayload, student_input: str) -> TeachBackEvaluation:

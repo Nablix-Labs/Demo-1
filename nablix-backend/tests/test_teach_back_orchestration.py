@@ -545,6 +545,26 @@ def test_realtime_backend_checks_claims_before_progress(upstream: dict[str, obje
     assert session_service._sessions[session_id].teach_back_content.state.completed_micro_skill_ids == ([] if verified is None else ["T02.M1"])
 
 
+@pytest.mark.parametrize("wording", [
+    "I'm not sure what you mean there. Could you explain the letter to me?",
+    "Can you teach me what the letter represents?",
+])
+def test_realtime_clear_question_retries_without_saving_unclear_reply(upstream: dict[str, object], wording: str) -> None:
+    session_id = upstream["session_id"]
+    result = realtime_result(session_id, "TURN-QUESTION", "Why?", None)
+    result["reply"] = {**result["reply"], "tutor_message": wording, "tutor_message_voice": wording}
+    before = deepcopy(upstream["events"])
+    rejected = client.post("/voice/teach-back/result", json=result)
+    assert rejected.status_code == 422
+    assert rejected.json()["error_code"] == "INVALID_TEACH_BACK_REPLY"
+    assert upstream["events"] == before
+    assert upstream["engine_calls"] == 0
+    corrected = realtime_result(session_id, "TURN-QUESTION", "Why?", None)
+    assert client.post("/voice/teach-back/result", json=corrected).status_code == 200
+    state = session_service._sessions[session_id].teach_back_content.state
+    assert state.failed_explanation_count == 0 and state.completed_micro_skill_ids == []
+
+
 def test_realtime_lost_ack_recovers_and_duplicate_does_not_record_twice(upstream: dict[str, object]) -> None:
     session_id = upstream["session_id"]
     result = realtime_result(session_id, "TURN-001", "A number", "UNDERSTOOD")
