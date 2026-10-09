@@ -281,11 +281,19 @@ export default function ConnectedTeachBackClient() {
     setLines((prev) => [...prev, { role: 'student', text: turn.transcript }]);
     useNumeraStore.getState().addTranscriptMessage({ role: 'student', text: turn.transcript });
     await runTurn(turn.transcript, async () => {
-      const response = await postRealtime(body);
-      if (connection.current === active) {
-        active.acknowledge(turn.callId, JSON.stringify({ accepted: true, tutor_message: response.message }));
+      let proposal = turn;
+      for (let attempt = 0; attempt <= active.replyRetryCount; attempt += 1) {
+        try {
+          return await postRealtime({ ...body, reply: proposal.reply });
+        } catch (cause: unknown) {
+          const rejection = axios.isAxiosError(cause) ? cause.response?.data as { error_code?: string; message?: string } | undefined : undefined;
+          if (rejection?.error_code !== 'INVALID_TEACH_BACK_REPLY' || typeof rejection.message !== 'string' || attempt === active.replyRetryCount) throw cause;
+          console.warn('teach_back_reply_retry', { attempt: attempt + 1, turn_id: body.interaction.turn_id, validation_error: rejection.message });
+          await active.refreshContext(body.interaction.session_id, studentId());
+          proposal = await active.retryReply(proposal, rejection.message);
+        }
       }
-      return response;
+      throw new Error('Teach-back reply exhausted its configured validation retries.');
     });
     const id = useNumeraStore.getState().sessionId;
     if (connection.current && useNumeraStore.getState().currentPhase === 'TEACH_BACK' && id) {

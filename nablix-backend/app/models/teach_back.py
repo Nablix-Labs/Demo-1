@@ -30,6 +30,13 @@ class TeachBackEvaluation(BaseModel):
         return self
 
 
+class TeachBackEvidenceEvaluation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    student_claim: str | None
+    evaluation: TeachBackEvaluation
+
+
 class TeachBackReply(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

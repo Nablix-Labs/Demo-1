@@ -1,6 +1,9 @@
 import { api } from '@/lib/api';
 
+type RealtimeSchemaValue = string | number | boolean | null | RealtimeSchemaValue[] | { [key: string]: RealtimeSchemaValue };
+
 export interface TeachBackReply {
+  student_evidence: string | null;
   evaluation: {
     understanding_status: 'UNDERSTOOD' | 'MISCONCEPTION' | null;
     misconception_detected: boolean;
@@ -18,6 +21,8 @@ export interface TeachBackRealtimeContext {
   teach_back_id: string;
   micro_skill_id: string;
   tool_name: string;
+  tool_description: string;
+  tool_parameters: { [key: string]: RealtimeSchemaValue };
 }
 
 interface RealtimeSession {
@@ -55,6 +60,8 @@ interface PendingTurn {
   resolve: (turn: RealtimeTurn) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  validationError: string | null;
+  transcriptionItemId: string | null;
 }
 
 /** Owns only the OpenAI connection; backend validation owns all teaching decisions. */
@@ -63,6 +70,7 @@ export class TeachBackVoiceConnection {
   private readonly channel: RTCDataChannel;
   private readonly microphone: MediaStream;
   private readonly timeoutMs: number;
+  readonly replyRetryCount: number;
   private pending: PendingTurn | null;
   private context: TeachBackRealtimeContext;
 
@@ -71,6 +79,7 @@ export class TeachBackVoiceConnection {
     this.channel = channel;
     this.microphone = microphone;
     this.timeoutMs = session.response_timeout_seconds * 1000;
+    this.replyRetryCount = session.request_retry_count;
     this.context = session.context;
     this.pending = null;
     channel.onmessage = (event: MessageEvent<string>) => this.receive(event.data);
@@ -147,7 +156,6 @@ export class TeachBackVoiceConnection {
   async refreshContext(sessionId: string, studentId: string): Promise<void> {
     const response = await api.post<TeachBackRealtimeContext>('/voice/teach-back/context', { session_id: sessionId, student_id: studentId });
     this.context = response.data;
-    this.channel.send(JSON.stringify({ type: 'session.update', session: { type: 'realtime', instructions: this.context.instructions } }));
   }
 
   startListening(): void {
@@ -159,25 +167,22 @@ export class TeachBackVoiceConnection {
 
   finishListening(): Promise<RealtimeTurn> {
     this.microphone.getAudioTracks().forEach((track) => { track.enabled = false; });
-    const turn = this.waitForTurn('');
+    const turn = this.waitForTurn('', null, null);
     this.channel.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
     // Transcription must finish first so the backend receives final student evidence.
     return turn;
   }
 
   submitText(text: string): Promise<RealtimeTurn> {
-    const turn = this.waitForTurn(text);
-    this.channel.send(JSON.stringify({ type: 'conversation.item.create', item: {
-      type: 'message', role: 'user', content: [{ type: 'input_text', text }],
-    } }));
+    const turn = this.waitForTurn(text, null, null);
     this.requestReply();
     return turn;
   }
 
-  acknowledge(callId: string, message: string): void {
-    this.channel.send(JSON.stringify({ type: 'conversation.item.create', item: {
-      type: 'function_call_output', call_id: callId, output: message,
-    } }));
+  retryReply(turn: RealtimeTurn, validationError: string): Promise<RealtimeTurn> {
+    const corrected = this.waitForTurn(turn.transcript, turn.transcriptConfidence, validationError);
+    this.requestReply();
+    return corrected;
   }
 
   close(): void {
@@ -187,17 +192,26 @@ export class TeachBackVoiceConnection {
     this.peer.close();
   }
 
-  private waitForTurn(transcript: string): Promise<RealtimeTurn> {
+  private waitForTurn(transcript: string, transcriptConfidence: number | null, validationError: string | null): Promise<RealtimeTurn> {
     if (this.pending) throw new Error('A teachback turn is already in progress.');
     if (this.channel.readyState !== 'open') throw new Error('The voice connection is not open.');
     return new Promise<RealtimeTurn>((resolve, reject) => {
       const timer = setTimeout(() => this.fail(new Error('The voice tutor timed out. Reconnect before trying again.')), this.timeoutMs);
-      this.pending = { transcript, transcriptConfidence: null, reply: null, callId: null, resolve, reject, timer };
+      this.pending = { transcript, transcriptConfidence, validationError, transcriptionItemId: null, reply: null, callId: null, resolve, reject, timer };
     });
   }
 
   private requestReply(): void {
-    this.channel.send(JSON.stringify({ type: 'response.create', response: { instructions: this.context.instructions } }));
+    if (!this.pending) throw new Error('A final student transcript is required before evaluation.');
+    const feedback = this.pending.validationError === null ? ''
+      : `\nThe previous reply was rejected before any progress was saved. Re-evaluate this same transcript and correct response_validation_error: ${JSON.stringify(this.pending.validationError)}`;
+    this.channel.send(JSON.stringify({ type: 'response.create', response: {
+      conversation: 'none',
+      instructions: this.context.instructions + feedback,
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: this.pending.transcript }] }],
+      tools: [{ type: 'function', name: this.context.tool_name, description: this.context.tool_description, parameters: this.context.tool_parameters }],
+      tool_choice: { type: 'function', name: this.context.tool_name },
+    } }));
   }
 
   private receive(raw: string): void {
@@ -209,7 +223,10 @@ export class TeachBackVoiceConnection {
       return;
     }
     if (!this.pending) return;
-    if (event.type === 'conversation.item.input_audio_transcription.completed') {
+    if (event.type === 'input_audio_buffer.committed' && !this.pending.transcript) {
+      this.pending.transcriptionItemId = event.item_id ?? null;
+    } else if (event.type === 'conversation.item.input_audio_transcription.completed') {
+      if (this.pending.transcript || !event.item_id || event.item_id !== this.pending.transcriptionItemId) return;
       this.pending.transcript = event.transcript ?? '';
       if (!this.pending.transcript.trim()) {
         this.fail(new Error('No speech was transcribed. Speak your explanation again.'));

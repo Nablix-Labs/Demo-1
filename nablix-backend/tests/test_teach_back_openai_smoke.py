@@ -76,6 +76,7 @@ CURIOUS_STUDENT_TURNS: tuple[tuple[str, str | None, str], ...] = (
     ("So then, um, I lost my words.", None, "T02.M1"),
     ("The starting number always stays fixed, and the operation changes each time.", "MISCONCEPTION", "T02.M1"),
     ("The starting number changes and plus four stays the same.", "UNDERSTOOD", "T02.M1"),
+    ("As I already explained, adding four stays fixed.", None, "T02.M2"),
     ("What do you mean by a letter here?", None, "T02.M2"),
     ("N is, um, I haven't finished explaining yet.", None, "T02.M2"),
     ("N is the name of an object, like apples, rather than a number.", "MISCONCEPTION", "T02.M2"),
@@ -110,9 +111,14 @@ def assert_curiosity_without_grading(reply: TeachBackReply) -> None:
 
 
 def assert_question_answered(message: str, reply: TeachBackReply) -> None:
+    if message == CURIOUS_STUDENT_TURNS[4][0]:
+        for wording in (reply.tutor_message, reply.tutor_message_voice):
+            question = re.search(r"[^.!?]+\?", wording.lower())
+            assert question is not None, reply.model_dump()
+            assert "letter" in question[0] or re.search(r"\bn\b", question[0]), reply.model_dump()
     required_words = {
-        CURIOUS_STUDENT_TURNS[0][0]: ("fixed", "same"),
-        CURIOUS_STUDENT_TURNS[4][0]: ("number", "quantity"),
+        "Why are we comparing the starting numbers?": ("fixed", "same"),
+        "What do you mean by a letter here?": ("number", "quantity"),
     }.get(message)
     if required_words is not None:
         for wording in (reply.tutor_message, reply.tutor_message_voice):

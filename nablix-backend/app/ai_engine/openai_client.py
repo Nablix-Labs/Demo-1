@@ -1121,6 +1121,29 @@ class OpenAIAIEngineClient:
                 f"invalid Explain Again response: {error}",
             ) from error
 
+    def evaluate_teach_back(self, context: dict[str, object], schema: dict[str, object], instructions: str) -> dict[str, object]:
+        request_body: dict[str, object] = {
+            "model": self._model, "store": self._store_responses,
+            "input": [{"role": "system", "content": instructions},
+                      {"role": "user", "content": json.dumps(context, ensure_ascii=False)}],
+            "text": {"format": {"type": "json_schema", "name": "teach_back_evidence", "schema": openai_strict_schema(schema), "strict": True}},
+        }
+        response, latency_ms = self._post_with_retries(request_body)
+        if response.status_code != 200:
+            raise AdapterError("openai_ai_engine", f"status={response.status_code} body={response.text}")
+        try:
+            payload = response.json()
+            usage = extract_openai_usage_metrics(payload)
+            logger.info("openai_teach_back_evaluation_usage", extra={
+                "component": "teach_back_evidence", "model": self._model,
+                "request_id": payload.get("id") if isinstance(payload, dict) else None,
+                "prompt_sha256": sha256_text(instructions), "latency_ms": round(latency_ms, 3),
+                "input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens,
+            })
+            return json.loads(_extract_response_text(payload))
+        except (TypeError, ValueError, KeyError, ValidationError) as error:
+            raise AdapterError("openai_ai_engine", f"unparseable Teach-Back evaluation: {error}; body={response.text}") from error
+
     def generate_teach_back(
         self,
         context: dict[str, object],
@@ -1135,6 +1158,12 @@ class OpenAIAIEngineClient:
             *context["discussion_actions"], *required_actions.values(),
         ]))
         response_schema["properties"]["next_action"]["description"] = json.dumps(required_actions)
+        verified = context.get("verified_evaluation")
+        if isinstance(verified, dict):
+            for field, value in verified.items():
+                response_schema["$defs"]["TeachBackEvaluation"]["properties"][field]["enum"] = [value]
+            verdict = verified["understanding_status"]
+            response_schema["properties"]["next_action"]["enum"] = context["discussion_actions"] if verdict is None else [required_actions[verdict]]
         if context.get("input_requires_clarification") is True:
             response_schema["$defs"]["TeachBackEvaluation"]["properties"]["understanding_status"] = {"type": "null"}
         return self._request_json(

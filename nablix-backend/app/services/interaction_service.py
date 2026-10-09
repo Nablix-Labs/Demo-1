@@ -10,7 +10,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from app.ai_engine.teach_back import teach_back_input_reply, validate_teach_back_content, validate_teach_back_reply
+from app.ai_engine.teach_back import evaluate_teach_back_answer, teach_back_action, teach_back_input_reply, validate_teach_back_content, validate_teach_back_reply, validate_teach_back_wording
 from app.models.session import PendingTeachBackOperation, TeachBackReceipt
 from app.models.teach_back import TeachBackReply, TeachBackStoredReply
 from app.models.teach_back_realtime import TeachBackRealtimeResult
@@ -4047,6 +4047,21 @@ async def _process_teach_back(request: InteractionRequest, session: SessionRecor
     return await _record_teach_back_reply(request, session, access_token, reply)
 
 
+def _validate_teach_back_turn_reply(request: InteractionRequest, content: TeachBackPayload, reply: TeachBackReply) -> None:
+    try:
+        validate_teach_back_reply(content, reply)
+        student_input = request.voice_transcript if request.input_source == "VOICE" else request.text_input
+        if student_input is not None and teach_back_input_reply(student_input, request.input_source, request.transcript_confidence) is None:
+            validate_teach_back_wording(reply, student_input)
+    except ValueError as error:
+        logger.warning("teach_back_reply_rejected", extra={"session_id": request.session_id,
+                       "turn_id": request.turn_id, "teach_back_id": content.teach_back_id,
+                       "completed_micro_skill_ids": content.state.completed_micro_skill_ids,
+                       "micro_skill_id": content.state.current_micro_skill_id, "validation_error": str(error),
+                       "reply": reply.model_dump()})
+        raise HTTPException(status_code=422, detail={"code": "INVALID_TEACH_BACK_REPLY", "message": str(error)}) from error
+
+
 async def _record_teach_back_reply(
     request: InteractionRequest, session: SessionRecord, access_token: str, reply: TeachBackReply,
 ) -> InteractionResponse:
@@ -4055,10 +4070,7 @@ async def _record_teach_back_reply(
     student_input = request.voice_transcript if request.input_source == "VOICE" else request.text_input
     if content is None or event is None or student_input is None:
         raise HTTPException(status_code=503, detail="Teach-Back context or student evidence is missing.")
-    try:
-        validate_teach_back_reply(content, reply)
-    except ValueError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
+    _validate_teach_back_turn_reply(request, content, reply)
     turn_event = TeachBackTurnRecordedEvent(
         request_id=_schema_request_id(session, request.turn_id, "TEACH_BACK_TURN_RECORDED"),
         event_type="TEACH_BACK_TURN_RECORDED", source_turn_id=request.turn_id,
@@ -4105,7 +4117,39 @@ async def process_realtime_teach_back(
             raise HTTPException(status_code=422, detail="A final student transcript or text is required.")
         reply = teach_back_input_reply(student_input, request.input_source, request.transcript_confidence)
         if reply is None:
+            evidence = result.reply.student_evidence
+            if result.reply.evaluation.understanding_status is not None:
+                claim = evidence.strip().strip('"“”') if evidence is not None else ""
+                if not claim or claim.casefold() not in student_input.casefold():
+                    logger.warning("teach_back_student_evidence_rejected", extra={
+                        "session_id": session.session_id, "micro_skill_id": result.micro_skill_id,
+                        "turn_id": request.turn_id, "teach_back_id": content.teach_back_id,
+                        "student_evidence": evidence, "student_input": student_input,
+                    })
+                    raise HTTPException(status_code=422, detail={"code": "INVALID_TEACH_BACK_REPLY",
+                                        "message": "A graded verdict must quote a current-target claim from this student turn, not a lesson or earlier explanation. Correct claims about only a completed concept have a null verdict and null student_evidence."})
+            elif evidence is not None:
+                raise HTTPException(status_code=422, detail={"code": "INVALID_TEACH_BACK_REPLY",
+                                    "message": "Only a graded verdict can include current-target student evidence."})
             reply = result.reply
+            _validate_teach_back_turn_reply(request, content, reply)
+            verified = await asyncio.to_thread(evaluate_teach_back_answer, content, student_input)
+            if (reply.evaluation.understanding_status != verified.understanding_status
+                    or reply.evaluation.error_code != verified.error_code):
+                logger.warning("teach_back_live_evaluation_rejected", extra={
+                    "session_id": session.session_id, "turn_id": request.turn_id,
+                    "micro_skill_id": result.micro_skill_id, "proposed_evaluation": reply.evaluation.model_dump(),
+                    "verified_evaluation": verified.model_dump(),
+                })
+                raise HTTPException(status_code=422, detail={"code": "INVALID_TEACH_BACK_REPLY",
+                    "message": f"Backend checked the latest transcript against the current target. Use this verified evaluation: {verified.model_dump_json()} and next_action={teach_back_action(content, verified.understanding_status)}. Choose student_evidence=null for a null verdict; do not reopen or credit a completed concept."})
+            logger.info("teach_back_live_evaluation_verified", extra={
+                "session_id": session.session_id, "turn_id": request.turn_id,
+                "micro_skill_id": result.micro_skill_id, "understanding_status": verified.understanding_status,
+                "error_code": verified.error_code, "next_action": reply.next_action,
+                "completed_micro_skill_ids": content.state.completed_micro_skill_ids,
+            })
+            reply = reply.model_copy(update={"evaluation": verified})
         try:
             return await _record_teach_back_reply(request, session, access_token, reply)
         except JourneyVersionConflict as conflict:
