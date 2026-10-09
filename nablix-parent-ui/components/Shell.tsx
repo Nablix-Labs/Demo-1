@@ -9,8 +9,8 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import {
-  LayoutGrid, BookOpen, Route, Sparkles, ListChecks, CalendarClock, FileText, ShieldCheck, Settings,
-  LogOut, Info, RotateCw, Download, Menu, X,
+  LayoutDashboard, BookOpen, Map, Target, ListChecks, CalendarDays, FileText, ShieldCheck, Settings,
+  LogOut, Info, RotateCw, Download, Menu, X, PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
 import { ChildProvider, useChild, RANGES } from '@/lib/useChild';
 import { getToken, isSample, signOut, BASE_PATH } from '@/lib/api';
@@ -18,96 +18,149 @@ import { Segments, PillButton } from './ui';
 import type { ChildData } from '@/lib/types';
 
 const NAV = [
-  { href: '/', label: 'Overview', icon: LayoutGrid },
-  { href: '/topics', label: 'Topics', icon: BookOpen },
-  { href: '/journey', label: 'Learning journey', icon: Route },
-  { href: '/skills', label: 'Strengths & weaknesses', icon: Sparkles },
-  { href: '/next-steps', label: 'Next steps', icon: ListChecks },
-  { href: '/activity', label: 'Activity', icon: CalendarClock },
-  { href: '/reports', label: 'Reports', icon: FileText },
-  { href: '/consent', label: 'Consent & privacy', icon: ShieldCheck },
-  { href: '/settings', label: 'Settings', icon: Settings },
+  {
+    section: 'Progress',
+    items: [
+      { href: '/', label: 'Overview', icon: LayoutDashboard },
+      { href: '/topics', label: 'Topics', icon: BookOpen },
+      { href: '/journey', label: 'Learning journey', icon: Map },
+      { href: '/skills', label: 'Strengths & weaknesses', icon: Target },
+      { href: '/next-steps', label: 'Next steps', icon: ListChecks },
+      { href: '/activity', label: 'Activity', icon: CalendarDays },
+    ],
+  },
+  {
+    section: 'Account',
+    items: [
+      { href: '/reports', label: 'Reports', icon: FileText },
+      { href: '/consent', label: 'Consent & privacy', icon: ShieldCheck },
+      { href: '/settings', label: 'Settings', icon: Settings },
+    ],
+  },
 ];
 
-export function Logo({ onDark }: { onDark?: boolean }) {
+const COLLAPSE_KEY = 'nablix.parent.sidebar-collapsed';
+
+export function Logo({ onDark, markOnly }: { onDark?: boolean; markOnly?: boolean }) {
   return (
     <span className="flex items-center gap-2.5">
-      <svg viewBox="0 0 40 40" className="h-10 w-10" aria-hidden>
+      <svg viewBox="0 0 40 40" className="h-9 w-9 flex-shrink-0" aria-hidden>
         <rect width="40" height="40" rx="13" fill="#1F1D1A" />
         <path d="M12 28V12l16 16V12" fill="none" stroke="#F8F5E4" strokeWidth="3.6" strokeLinecap="round" strokeLinejoin="round" />
         <circle cx="30" cy="10" r="4" fill="#F4B63F" />
       </svg>
-      <span className="leading-none">
+      {!markOnly && <span className="leading-none">
         <span className={clsx('block text-[19px] font-black tracking-[-0.02em]', onDark ? 'text-white' : 'text-ink')}>Numera</span>
         <span className={clsx('mt-0.5 block text-[11px] font-extrabold', onDark ? 'text-white/70' : 'text-ink-soft')}>for parents</span>
-      </span>
+      </span>}
     </span>
   );
 }
 
 export const initials = (name: string) => name.split(/\s+/).map((p) => p[0]).slice(0, 2).join('').toUpperCase();
 
-function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+/**
+ * Collapsible on desktop (an icon rail, remembered per browser); a drawer on
+ * phones. Plain icons and one quiet active state: the page title says where you
+ * are, the sidebar only has to say where else you can go.
+ */
+function Sidebar({ open, onClose, collapsed, onToggle }: {
+  open: boolean;
+  onClose: () => void;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
   const path = usePathname();
   const { data } = useChild();
   const active = (href: string) => (href === '/' ? path === '/' : path.startsWith(href));
+  // The drawer on phones is always full width; only the desktop rail collapses.
+  const rail = collapsed && !open;
   return (
     <aside
+      aria-label="Sidebar"
       className={clsx(
-        'no-print fixed inset-y-0 left-0 z-30 flex w-[264px] flex-col overflow-y-auto bg-cream px-4 py-6 transition-transform lg:translate-x-0',
+        'no-print fixed inset-y-0 left-0 z-30 flex flex-col overflow-y-auto overflow-x-hidden border-r border-line bg-cream py-5 transition-[width,transform] duration-200 lg:translate-x-0',
+        rail ? 'w-[76px] px-3' : 'w-[248px] px-4',
         open ? 'translate-x-0 shadow-2xl' : '-translate-x-full',
       )}
     >
-      <div className="flex items-center justify-between px-2">
-        <Link href="/" onClick={onClose}><Logo /></Link>
-        <button className="rounded-full bg-cream-deep p-2 text-ink lg:hidden" onClick={onClose} aria-label="Close menu">
-          <X size={18} />
+      <div className={clsx('flex items-center', rail ? 'flex-col gap-3' : 'justify-between px-1')}>
+        <Link href="/" onClick={onClose} aria-label="Numera for parents, overview"><Logo markOnly={rail} /></Link>
+        <button
+          onClick={open ? onClose : onToggle}
+          aria-label={open ? 'Close menu' : collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={open ? 'Close menu' : collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          className="flex h-8 w-8 items-center justify-center rounded-[10px] text-ink-soft transition-colors hover:bg-cream-deep hover:text-ink"
+        >
+          {open ? <X size={18} /> : collapsed ? <PanelLeftOpen size={18} strokeWidth={2} /> : <PanelLeftClose size={18} strokeWidth={2} />}
         </button>
       </div>
 
       {data && (
-        <div className="mt-6 flex items-center gap-3 rounded-[22px] bg-card px-3 py-3">
-          <span className="flex h-12 w-12 items-center justify-center rounded-full border-[3px] border-white bg-mustard text-[15px] font-black text-ink">
+        <div
+          className={clsx('mt-5 flex items-center gap-3 rounded-[16px]', rail ? 'justify-center' : 'bg-card px-2.5 py-2.5')}
+          title={rail ? `${data.child.name}, ${data.child.year_group}` : undefined}
+        >
+          <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-mustard text-[13px] font-black text-ink">
             {initials(data.child.name)}
           </span>
-          <span className="min-w-0">
-            <span className="block truncate text-[15px] font-extrabold text-ink">{data.child.name}</span>
-            <span className="block text-[12.5px] font-bold text-ink-soft">{data.child.year_group}</span>
-          </span>
+          {!rail && (
+            <span className="min-w-0">
+              <span className="block truncate text-[14px] font-extrabold text-ink">{data.child.name}</span>
+              <span className="block text-[12px] font-bold text-ink-soft">{data.child.year_group}</span>
+            </span>
+          )}
         </div>
       )}
 
-      <nav className="mt-5 flex flex-col gap-1" aria-label="Main">
-        {NAV.map(({ href, label, icon: Icon }) => (
-          <Link
-            key={href}
-            href={href}
-            onClick={onClose}
-            aria-current={active(href) ? 'page' : undefined}
-            className={clsx(
-              'flex items-center gap-3 rounded-full px-3 py-2 text-[14px] font-extrabold transition-colors',
-              active(href) ? 'bg-ink text-white' : 'text-ink-soft hover:bg-cream-deep hover:text-ink',
-            )}
-          >
-            <span className={clsx('flex h-8 w-8 items-center justify-center rounded-full', active(href) ? 'bg-white/15' : 'bg-cream-deep')}>
-              <Icon size={16} strokeWidth={2.4} aria-hidden />
-            </span>
-            {label}
-          </Link>
+      <nav className="mt-5 flex flex-col gap-5" aria-label="Main">
+        {NAV.map(({ section, items }) => (
+          <div key={section} className="flex flex-col gap-0.5">
+            {rail
+              ? <span aria-hidden className="mx-auto mb-1 h-px w-6 bg-line" />
+              : <span className="mb-1 px-3 text-[11px] font-extrabold uppercase tracking-[0.08em] text-ink-soft/70">{section}</span>}
+            {items.map(({ href, label, icon: Icon }) => {
+              const on = active(href);
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  onClick={onClose}
+                  aria-current={on ? 'page' : undefined}
+                  aria-label={rail ? label : undefined}
+                  title={rail ? label : undefined}
+                  className={clsx(
+                    'group relative flex items-center rounded-[12px] text-[14px] font-bold transition-colors',
+                    rail ? 'h-11 justify-center' : 'gap-3 px-3 py-2.5',
+                    on ? 'bg-card text-ink' : 'text-ink-soft hover:bg-cream-deep/70 hover:text-ink',
+                  )}
+                >
+                  {on && <span aria-hidden className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-teal" />}
+                  <Icon size={18} strokeWidth={on ? 2.3 : 1.9} aria-hidden className="flex-shrink-0" />
+                  {!rail && <span className="truncate">{label}</span>}
+                </Link>
+              );
+            })}
+          </div>
         ))}
       </nav>
 
-      <div className="mt-auto pt-6">
-        {!isSample && (
+      {!isSample && (
+        <div className="mt-auto pt-6">
           <button
             onClick={() => { signOut(); window.location.assign(`${BASE_PATH}/login/`); }}
-            className="flex w-full items-center gap-3 rounded-full px-3 py-2 text-[14px] font-extrabold text-ink-soft hover:bg-cream-deep"
+            aria-label={rail ? 'Sign out' : undefined}
+            title={rail ? 'Sign out' : undefined}
+            className={clsx(
+              'flex w-full items-center rounded-[12px] text-[14px] font-bold text-ink-soft transition-colors hover:bg-cream-deep/70 hover:text-ink',
+              rail ? 'h-11 justify-center' : 'gap-3 px-3 py-2.5',
+            )}
           >
-            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-cream-deep"><LogOut size={16} strokeWidth={2.4} aria-hidden /></span>
-            Sign out
+            <LogOut size={18} strokeWidth={1.9} aria-hidden />
+            {!rail && 'Sign out'}
           </button>
-        )}
-      </div>
+        </div>
+      )}
     </aside>
   );
 }
@@ -142,17 +195,29 @@ function Topbar({ onMenu }: { onMenu: () => void }) {
 function Frame({ children }: { children: (d: ChildData) => ReactNode }) {
   const { data, error, needsLogin, reload } = useChild();
   const [menu, setMenu] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
     if (needsLogin) router.replace('/login');
   }, [needsLogin, router]);
 
+  useEffect(() => {
+    try { setCollapsed(localStorage.getItem(COLLAPSE_KEY) === '1'); } catch { /* keep expanded */ }
+  }, []);
+
+  const toggle = () => {
+    setCollapsed((c) => {
+      try { localStorage.setItem(COLLAPSE_KEY, c ? '0' : '1'); } catch { /* not remembered */ }
+      return !c;
+    });
+  };
+
   return (
     <div className="min-h-screen overflow-x-hidden">
-      <Sidebar open={menu} onClose={() => setMenu(false)} />
+      <Sidebar open={menu} onClose={() => setMenu(false)} collapsed={collapsed} onToggle={toggle} />
       {menu && <div className="fixed inset-0 z-20 bg-ink/30 lg:hidden" onClick={() => setMenu(false)} />}
-      <main className="print-full px-4 py-6 sm:px-8 lg:ml-[264px]">
+      <main className={clsx('print-full px-4 py-6 transition-[margin] duration-200 sm:px-8', collapsed ? 'lg:ml-[76px]' : 'lg:ml-[248px]')}>
         <div className="print-full mx-auto max-w-[1240px]">
           <Topbar onMenu={() => setMenu(true)} />
           {isSample && (
