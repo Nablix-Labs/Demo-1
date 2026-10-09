@@ -42,6 +42,9 @@ grading_phrases:
   - "now let’s explore"
   - "remember,"
 clear_question_pattern: '^(?:why|what|how|when|where|which|can|could|do|does|is|are)\b'
+clear_question_answer_keywords:
+  "why are we comparing": [fixed, same, operation]
+  "what do you mean by a letter": [number, quantity, symbol]
 unclear_question_phrases:
   - "I couldn't follow"
   - "I couldn’t follow"

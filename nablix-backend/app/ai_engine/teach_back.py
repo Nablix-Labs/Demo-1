@@ -48,6 +48,7 @@ class TeachBackConfig(BaseModel):
     curious_student_pattern: str
     grading_phrases: list[str]
     clear_question_pattern: str
+    clear_question_answer_keywords: dict[str, list[str]]
     unclear_question_phrases: list[str]
     evaluation_instructions: str
 
@@ -166,6 +167,11 @@ def validate_teach_back_wording(reply: TeachBackReply, student_input: str) -> No
             phrase.casefold() in wording.casefold() for phrase in config.unclear_question_phrases
         ):
             raise ValueError("The student asked a clear question. Answer it directly; do not pretend their speech was unclear or say I couldn't follow. Keep the curious-student voice.")
+        question_key = next((key for key in config.clear_question_answer_keywords if key.casefold() in student_input.casefold()), None)
+        if question_key is not None:
+            answer = wording.split("?", 1)[0].casefold()
+            if not any(keyword.casefold() in answer for keyword in config.clear_question_answer_keywords[question_key]):
+                raise ValueError("Answer the student's clear question before asking the curious-student follow-up.")
 
 
 def evaluate_teach_back_answer(content: TeachBackPayload, student_input: str) -> TeachBackEvaluation:
