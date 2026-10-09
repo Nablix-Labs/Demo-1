@@ -15,13 +15,14 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 type TeachBackMode = 'standard' | 'realtime';
 type Turn = { role: 'student' | 'tutor'; text: string };
 
-function interactionFor(text: string, source: 'TEXT' | 'VOICE'): InteractionPayload {
+function interactionFor(text: string, source: 'TEXT' | 'VOICE', confidence: number | null): InteractionPayload {
   const state = useNumeraStore.getState();
   if (!state.sessionId || state.currentPhase !== 'TEACH_BACK') throw new Error('Open an active teachback lesson first.');
   return {
     session_id: state.sessionId, student_id: studentId(),
     interaction_type: 'TEACH_BACK_SUBMISSION', input_source: source,
     ...(source === 'TEXT' ? { text_input: text } : { voice_transcript: text, transcript_final: true }),
+    ...(source === 'VOICE' && confidence !== null ? { transcript_confidence: confidence } : {}),
     current_phase: 'TEACH_BACK', concept_id: state.activeConceptId,
     question_id: state.activeQuestionId, hint_count: 0,
     turn_id: state.beginSubmissionTurn(), previous_tutor_turn_id: state.lastTutorTurnId,
@@ -98,7 +99,7 @@ export default function ConnectedTeachBackClient() {
     if (!active) throw new Error('The voice connection closed before the reply could be saved.');
     const context = active.lessonContext;
     const interaction: InteractionPayload = {
-      ...interactionFor(turn.transcript, source),
+      ...interactionFor(turn.transcript, source, turn.transcriptConfidence),
       ...(turn.transcriptConfidence !== null ? { transcript_confidence: turn.transcriptConfidence } : {}),
     };
     setTurns((previous) => [...previous, { role: 'student', text: turn.transcript }]);
@@ -122,11 +123,11 @@ export default function ConnectedTeachBackClient() {
     setConnected(false); setListening(false);
   };
 
-  const submitStandard = async (value: string, source: 'TEXT' | 'VOICE'): Promise<void> => {
+  const submitStandard = async (value: string, source: 'TEXT' | 'VOICE', confidence: number | null): Promise<void> => {
     if (inFlight.current || !value.trim()) return;
     inFlight.current = true; setBusy(true); setError(null);
     try {
-      const interaction = interactionFor(value, source);
+      const interaction = interactionFor(value, source, confidence);
       setTurns((previous) => [...previous, { role: 'student', text: value }]);
       useNumeraStore.getState().addTranscriptMessage({ role: 'student', text: value });
       retrySave.current = async () => {
@@ -139,9 +140,10 @@ export default function ConnectedTeachBackClient() {
     finally { inFlight.current = false; if (mounted.current) setBusy(false); }
   };
 
-  const standardVoice = useVoiceTurn({ onTurnEnd: (transcript) => {
+  const standardVoice = useVoiceTurn({ onTurnEnd: (transcript: string, confidence: number | undefined): void => {
+    standardVoice.stop();
     setListening(false);
-    if (transcript) void submitStandard(transcript, 'VOICE');
+    if (transcript) void submitStandard(transcript, 'VOICE', confidence ?? null);
   } });
 
   const connectVoice = async (): Promise<void> => {
@@ -157,7 +159,7 @@ export default function ConnectedTeachBackClient() {
 
   const toggleMic = async (): Promise<void> => {
     if (mode === 'standard') {
-      if (standardVoice.active) standardVoice.stop();
+      if (standardVoice.active) standardVoice.finish();
       else { stopTutorSpeech(); standardVoice.start(); setListening(true); }
       return;
     }
@@ -175,7 +177,7 @@ export default function ConnectedTeachBackClient() {
   };
 
   const submitText = async (): Promise<void> => {
-    if (mode === 'standard') { await submitStandard(text, 'TEXT'); return; }
+    if (mode === 'standard') { await submitStandard(text, 'TEXT', null); return; }
     const active = connection.current;
     if (!active || inFlight.current || !text.trim()) return;
     inFlight.current = true; setBusy(true); setError(null);
@@ -199,6 +201,7 @@ export default function ConnectedTeachBackClient() {
         <h1 className="text-xl font-semibold text-focus-navy">Your turn to teach</h1>
         <label className="flex items-center gap-3 text-sm">Conversation mode
           <select value={mode} disabled={disabled || listening} onChange={(event) => {
+            standardVoice.stop();
             connection.current?.close(); connection.current = null; setConnected(false);
             setMode(event.target.value as TeachBackMode); setError(null);
           }} className="rounded-lg border bg-white p-2">

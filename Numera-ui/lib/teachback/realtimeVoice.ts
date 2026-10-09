@@ -170,7 +170,7 @@ export class TeachBackVoiceConnection {
     this.channel.send(JSON.stringify({ type: 'conversation.item.create', item: {
       type: 'message', role: 'user', content: [{ type: 'input_text', text }],
     } }));
-    this.channel.send(JSON.stringify({ type: 'response.create' }));
+    this.requestReply();
     return turn;
   }
 
@@ -196,6 +196,10 @@ export class TeachBackVoiceConnection {
     });
   }
 
+  private requestReply(): void {
+    this.channel.send(JSON.stringify({ type: 'response.create', response: { instructions: this.context.instructions } }));
+  }
+
   private receive(raw: string): void {
     let event: RealtimeEvent;
     try { event = JSON.parse(raw) as RealtimeEvent; }
@@ -207,6 +211,10 @@ export class TeachBackVoiceConnection {
     if (!this.pending) return;
     if (event.type === 'conversation.item.input_audio_transcription.completed') {
       this.pending.transcript = event.transcript ?? '';
+      if (!this.pending.transcript.trim()) {
+        this.fail(new Error('No speech was transcribed. Speak your explanation again.'));
+        return;
+      }
       if (event.logprobs?.length) {
         if (event.logprobs.some((entry) => !Number.isFinite(entry.logprob) || entry.logprob > 0)) {
           this.fail(new Error('The transcription returned invalid confidence data.'));
@@ -215,7 +223,7 @@ export class TeachBackVoiceConnection {
         // Geometric mean token probability supplies the existing 0–1 confidence check.
         this.pending.transcriptConfidence = Math.exp(event.logprobs.reduce((sum, entry) => sum + entry.logprob, 0) / event.logprobs.length);
       }
-      this.channel.send(JSON.stringify({ type: 'response.create' }));
+      this.requestReply();
     } else if (event.type === 'response.function_call_arguments.done') {
       if (event.name !== this.context.tool_name || !event.arguments || !event.call_id) {
         this.fail(new Error('The voice tutor returned an unexpected tool result.'));

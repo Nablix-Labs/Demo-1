@@ -147,9 +147,16 @@ export function useVoiceTurn({
     void audioCtxRef.current?.close();
     audioCtxRef.current = null;
     transcriptRef.current = '';
+    confidenceRef.current = undefined;
     hadSpeechRef.current = false;
     useMicLevel.getState().setActive(false);
+    useMicLevel.getState().setCaption('');
   }, []);
+
+  const finish = useCallback(() => {
+    commitTurn();
+    stop();
+  }, [commitTurn, stop]);
 
   const start = useCallback(async () => {
     // `starting` is checked synchronously so two calls in one tick can't both
@@ -210,6 +217,7 @@ export function useVoiceTurn({
       recognition.interimResults = true;
       recognition.lang = 'en-US';
       recognition.onresult = (e) => {
+        if (!activeRef.current || myGeneration !== generation.current) return;
         let interim = '';
         for (let i = e.resultIndex; i < e.results.length; i++) {
           const result = e.results[i];
@@ -305,5 +313,5 @@ export function useVoiceTurn({
   // Clean up on unmount.
   useEffect(() => stop, [stop]);
 
-  return { active, speaking, supported, start, stop };
+  return { active, speaking, supported, start, stop, finish };
 }

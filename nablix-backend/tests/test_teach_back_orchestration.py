@@ -507,7 +507,7 @@ def test_live_realtime_teach_back_tool(upstream: dict[str, object], monkeypatch:
                         probabilities = event["logprobs"]
                         assert probabilities
                         confidence = math.exp(sum(entry["logprob"] for entry in probabilities) / len(probabilities))
-                        await connection.send(json.dumps({"type": "response.create"}))
+                        await connection.send(json.dumps({"type": "response.create", "response": {"instructions": context["instructions"]}}))
                     if event["type"] == "response.function_call_arguments.done":
                         assert event["name"] == context["tool_name"]
                         reply = TeachBackReply.model_validate_json(event["arguments"])
