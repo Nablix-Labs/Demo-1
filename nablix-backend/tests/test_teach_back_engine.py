@@ -48,7 +48,7 @@ def conceptual_ai(monkeypatch: pytest.MonkeyPatch):
             action = "DISCUSS_AND_CLARIFY" if verdict is None else context["required_actions"][verdict]
             return {
                 "evaluation": {"understanding_status": verdict, "misconception_detected": verdict == "MISCONCEPTION", "error_code": "ERR-LETTER" if verdict == "MISCONCEPTION" else None, "unmapped_misconception_description": None},
-                "tutor_message": "The letter represents a number.", "tutor_message_voice": "The letter represents a number.",
+                "tutor_message": "The letter represents a number. What does it represent?" if action == "NEXT_MICRO_SKILL" else "The letter represents a number.", "tutor_message_voice": "The letter represents a number. What does it represent?" if action == "NEXT_MICRO_SKILL" else "The letter represents a number.",
                 "next_action": action,
             }
 
@@ -82,7 +82,7 @@ def test_conceptual_ai_endpoint_does_not_mutate_progress(conceptual_ai, message,
     assert content == before
 
 
-@pytest.mark.parametrize("message,source,confidence", [("okay", "TEXT", None), ("", "TEXT", None), ("unclear", "VOICE", 0.1)])
+@pytest.mark.parametrize("message,source,confidence", [("next tell me", "TEXT", None), ("I'm ready for the next one", "TEXT", None), ("okay next please", "TEXT", None), ("okay", "TEXT", None), ("", "TEXT", None), ("unclear", "VOICE", 0.1)])
 def test_acknowledgements_and_unclear_voice_do_not_fail(conceptual_ai, message, source, confidence):
     reply = teach_back.generate_teach_back_reply(TeachBackPayload.model_validate(teach_back_content()), message, source, confidence, [])
     assert reply.evaluation.understanding_status is None

@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+import re
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -10,6 +11,7 @@ from app.ai_engine.classifier import (
 from app.ai_engine.classifier_config import load_classifier_rules
 from app.core.config import get_settings
 from app.core.exceptions import AdapterError
+from app.core.logger import logger
 from app.models.adapters import ConversationMessage
 from app.models.teach_back import TeachBackAction, TeachBackEvaluation, TeachBackPayload, TeachBackReply
 
@@ -40,6 +42,7 @@ class TeachBackConfig(BaseModel):
     acknowledgement_message: str
     completion_message: str
     forbidden_student_text_patterns: list[str]
+    non_explanation_patterns: list[str]
 
 
 @lru_cache(maxsize=1)
@@ -108,6 +111,10 @@ def validate_teach_back_reply(content: TeachBackPayload, reply: TeachBackReply) 
             raise ValueError("Teach-Back reply exposes an internal reference.")
         if text.count("?") > 1:
             raise ValueError("Teach-Back reply must ask at most one question.")
+        if reply.next_action == "NEXT_MICRO_SKILL" and text.count("?") != 1:
+            raise ValueError("NEXT_MICRO_SKILL must ask one conceptual question about the next target.")
+        if reply.next_action in {"MOVE_TO_PHASE_2", "RETURN_TO_ORIENTATION"} and "?" in text:
+            raise ValueError("A phase transition must not ask another Teach-Back question.")
         if not check_student_message_safety(text, load_classifier_rules()).passed:
             raise ValueError("Teach-Back reply failed the existing safety check.")
 
@@ -122,7 +129,8 @@ def teach_back_input_reply(
         clarification = rules.messages.SAFETY_RESPONSE
     elif input_source == "VOICE" and is_low_confidence(transcript_confidence, rules):
         clarification = config.voice_clarification_message
-    elif not student_input.strip() or student_input.strip().lower() in rules.conversation_rules.acknowledgement_phrases:
+    elif (not student_input.strip() or student_input.strip().lower() in rules.conversation_rules.acknowledgement_phrases
+          or any(re.fullmatch(pattern, student_input.strip(), flags=re.IGNORECASE) for pattern in config.non_explanation_patterns)):
         clarification = config.acknowledgement_message
     if clarification is not None:
         return TeachBackReply(
@@ -154,6 +162,7 @@ def build_teach_back_context(
         "worked_example_context": content.worked_example_context.model_dump(),
         "conversation_mode": content.state.conversation_mode,
         "student_input": student_input,
+        "input_requires_clarification": teach_back_input_reply(student_input, input_source, transcript_confidence) is not None,
         "input_source": input_source,
         "transcript_confidence": transcript_confidence,
         "required_actions": {v: teach_back_action(content, v) for v in ("UNDERSTOOD", "MISCONCEPTION")},
@@ -173,15 +182,28 @@ def generate_teach_back_reply(
     if input_reply is not None:
         return input_reply
     rules = load_classifier_rules()
-    client = build_openai_ai_engine_client(get_settings())
+    settings = get_settings()
+    client = build_openai_ai_engine_client(settings)
     if client is None:
         raise AdapterError("teach_back", "Teach-Back requires the configured AI engine and an API key.")
     context = build_teach_back_context(content, student_input, input_source, transcript_confidence)
-    try:
-        reply = TeachBackReply.model_validate(client.generate_teach_back(
+    for attempt in range(settings.adapter_request_retry_count + 1):
+        raw_reply = client.generate_teach_back(
             context, TeachBackReply.model_json_schema(), history[-rules.conversation_rules.max_recent_messages:] if rules.conversation_rules.max_recent_messages else []
-        ))
-        validate_teach_back_reply(content, reply)
-    except (ValidationError, ValueError) as error:
-        raise AdapterError("teach_back", f"Invalid Teach-Back response: {error}") from error
-    return reply
+        )
+        try:
+            reply = TeachBackReply.model_validate(raw_reply)
+            validate_teach_back_reply(content, reply)
+            return reply
+        except (ValidationError, ValueError) as error:
+            if attempt == settings.adapter_request_retry_count:
+                raise AdapterError("teach_back", f"Invalid Teach-Back response: {error}; response={raw_reply}") from error
+            logger.warning("teach_back_response_retry", extra={"attempt": attempt + 1, "reason": str(error), "response": raw_reply})
+            context = {**context, "response_validation_error": str(error)}
+            try:
+                evaluation = TeachBackEvaluation.model_validate(raw_reply.get("evaluation"))
+            except ValidationError:
+                continue
+            if evaluation.understanding_status is not None:
+                context = {**context, "required_response_action": teach_back_action(content, evaluation.understanding_status)}
+    raise AdapterError("teach_back", "Teach-Back response retry count must be nonnegative.")

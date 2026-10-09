@@ -169,13 +169,19 @@ def build_openai_tutor_messages(
     semi_static_block = build_semi_static_block(phase, active_triggers)
     serialized_context = serialize_session_context(session_context)
 
-    return [
+    messages = [
         {"role": "system", "content": registry.layer_1_core},
         {"role": "system", "content": semi_static_block},
         {"role": "system", "content": serialized_context},
         *[_coerce_history_message(message) for message in conversation_history],
         {"role": "user", "content": current_user_input},
     ]
+    if phase == "TEACH_BACK":
+        messages[1], messages[2] = messages[2], messages[1]
+        validation_error = session_context.get("response_validation_error")
+        if isinstance(validation_error, str):
+            messages.insert(-1, {"role": "system", "content": validation_error})
+    return messages
 
 
 def build_openai_tutor_prompt_metadata(

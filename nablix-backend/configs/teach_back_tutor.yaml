@@ -4,6 +4,10 @@ return_to_orientation_message: "Let's revisit this idea together, then you can t
 voice_clarification_message: "I didn't catch that clearly. Could you say the idea again?"
 acknowledgement_message: "Tell me the idea in your own words, as if I'm learning it from you."
 completion_message: "You've explained the ideas we needed. Let's use them in some problems."
+non_explanation_patterns:
+  - '(?:(?:okay|ok|yes|right)[, ]+)?(?:please )?next(?: (?:tell me|please|one|concept))?[.!?, ]*'
+  - '(?:i am|i\x27m|im) ready(?: for (?:the )?next(?: one|concept)?)?[.!?, ]*'
+  - '(?:please )?(?:tell me|go on|continue|move on|skip(?: this)?)[.!?, ]*'
 forbidden_student_text_patterns:
   - "micro_skill"
   - "error_code"
@@ -34,3 +38,12 @@ realtime:
     action, including introducing next_target when NEXT_MICRO_SKILL is required.
     Evaluate only the latest student explanation; earlier tutor speech is not
     student evidence. Use the current supplied context for every turn.
+    Every tool call must include evaluation, next_action, tutor_message and
+    tutor_message_voice. Both message fields are required even when they have
+    identical wording. Plan the action first, then check that both messages
+    obey it: NEXT_MICRO_SKILL asks one next-concept question; phase transitions
+    ask none. Never omit the voice message.
+    Answer student questions with a statement; do not repeat or quote their
+    question before answering it. Count every question mark in each message,
+    including quoted and rhetorical questions, when checking the one-question
+    limit.

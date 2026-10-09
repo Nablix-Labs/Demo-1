@@ -1127,9 +1127,23 @@ class OpenAIAIEngineClient:
         schema: dict[str, object],
         history: list[ConversationMessage],
     ) -> dict[str, object]:
+        response_schema = deepcopy(schema)
+        required_actions = context["required_actions"]
+        if not isinstance(required_actions, dict):
+            raise ValueError("Teach-Back requires backend progress actions.")
+        response_schema["properties"]["next_action"]["enum"] = list(dict.fromkeys([
+            *context["discussion_actions"], *required_actions.values(),
+        ]))
+        response_schema["properties"]["next_action"]["description"] = json.dumps(required_actions)
+        response_action = context.get("required_response_action")
+        if isinstance(response_action, str):
+            response_schema["properties"]["next_action"]["enum"] = [response_action]
+        if context.get("input_requires_clarification") is True:
+            response_schema["$defs"]["TeachBackEvaluation"]["properties"]["understanding_status"] = {"type": "null"}
         return self._request_json(
-            name="teach_back_conversation", schema=schema, phase="TEACH_BACK",
-            active_triggers=[], conversation_history=history, user_payload=context,
+            name="teach_back_conversation", schema=response_schema, phase="TEACH_BACK",
+            active_triggers=[], conversation_history=[],
+            user_payload={**context, "recent_history": [message.model_dump() for message in history]},
         )
 
     def generate_phase4_review(
@@ -1167,6 +1181,11 @@ class OpenAIAIEngineClient:
             separators=(",", ":"),
             ensure_ascii=False,
         )
+        if phase == "TEACH_BACK":
+            student_input = user_payload.get("student_input")
+            if not isinstance(student_input, str):
+                raise ValueError("Teach-Back requires a string student_input for the current user message.")
+            request_content = student_input
         messages = build_openai_tutor_messages(
             phase=phase,
             active_triggers=active_triggers,
