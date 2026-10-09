@@ -1,7 +1,12 @@
 'use client';
 
-import { Printer } from 'lucide-react';
-import Shell, { Logo } from '@/components/Shell';
+import { Suspense, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Printer, Users } from 'lucide-react';
+import clsx from 'clsx';
+import Shell, { Logo, initials } from '@/components/Shell';
+import { useFamily, type FamilyEntry } from '@/lib/useFamily';
+import { childLook } from '@/lib/childColor';
 import { PageHeader, dateLabel } from '@/components/ui';
 import {
   attemptsIn, outcomes, sessionsIn, snapshot, strengths, developing, misconceptionCounts, nextSteps,
@@ -11,20 +16,38 @@ import { useChild } from '@/lib/useChild';
 import type { ChildData } from '@/lib/types';
 
 export default function ReportsPage() {
-  return <Shell>{(d) => <Report d={d} />}</Shell>;
+  return (
+    <Shell>
+      {(d) => (
+        <Suspense>
+          <Reports d={d} />
+        </Suspense>
+      )}
+    </Shell>
+  );
 }
 
 /**
- * One printable page. "Download" is the browser's Save as PDF, which keeps the
- * report exactly as shown and needs no server.
+ * One child's report, or every child's one after another ("Whole family"),
+ * each on its own printed page. "Download" is the browser's Save as PDF, which
+ * keeps the report exactly as shown and needs no server.
  */
-function Report({ d }: { d: ChildData }) {
-  const { range } = useChild();
-  const first = d.child.name.split(' ')[0];
-  const attempts = attemptsIn(d, range);
-  const o = outcomes(attempts);
-  const snap = snapshot(sessionsIn(d, range));
-  const lastDay = new Date(range.to.getTime() - 86_400_000);
+function Reports({ d }: { d: ChildData }) {
+  const { range, children, selectChild } = useChild();
+  const params = useSearchParams();
+  const router = useRouter();
+  const [who, setWho] = useState<'child' | 'family'>(params.get('who') === 'family' ? 'family' : 'child');
+  const family = useFamily();
+  const many = children.length > 1;
+  const showFamily = many && who === 'family';
+  const ready = family.filter((e): e is Extract<FamilyEntry, { status: 'ready' }> => e.status === 'ready');
+
+  const pick = (next: 'family' | string) => {
+    if (next === 'family') { setWho('family'); router.replace('/reports?who=family'); return; }
+    selectChild(next);
+    setWho('child');
+    router.replace('/reports');
+  };
 
   return (
     <>
@@ -35,14 +58,67 @@ function Report({ d }: { d: ChildData }) {
           action={
             <button
               onClick={() => window.print()}
-              className="inline-flex items-center gap-2 rounded-[18px] bg-ink px-4 py-2.5 text-[13px] font-extrabold text-white hover:opacity-90"
+              disabled={showFamily && ready.length < family.length}
+              className="inline-flex items-center gap-2 rounded-full bg-ink px-5 py-3 text-[14px] font-extrabold text-white transition-transform active:scale-[0.97] disabled:opacity-50"
             >
               <Printer size={16} aria-hidden /> Print or save as PDF
             </button>
           }
         />
+        {many && (
+          <div className="mb-6 flex flex-wrap gap-2" role="group" aria-label="Whose report">
+            {children.map((k, i) => {
+              const on = !showFamily && k.student_code === d.child.student_code;
+              return (
+                <button
+                  key={k.student_code}
+                  onClick={() => pick(k.student_code)}
+                  aria-pressed={on}
+                  className={clsx(
+                    'flex items-center gap-2.5 rounded-full py-1.5 pl-1.5 pr-4 text-[14px] font-extrabold transition-colors',
+                    on ? 'bg-ink text-white' : 'bg-card text-ink hover:bg-white',
+                  )}
+                >
+                  <span className={clsx('flex h-8 w-8 items-center justify-center rounded-full text-[11px] font-black', childLook(i).avatar)}>{initials(k.name, children.map((x) => x.name))}</span>
+                  {k.name.split(' ')[0]}
+                </button>
+              );
+            })}
+            <button
+              onClick={() => pick('family')}
+              aria-pressed={showFamily}
+              className={clsx(
+                'flex items-center gap-2 rounded-full px-4 py-1.5 text-[14px] font-extrabold transition-colors',
+                showFamily ? 'bg-ink text-white' : 'bg-card text-ink hover:bg-white',
+              )}
+            >
+              <Users size={16} aria-hidden /> Whole family
+            </button>
+          </div>
+        )}
       </div>
 
+      {showFamily ? (
+        <div className="flex flex-col gap-6">
+          {family.map((e) => e.status === 'ready'
+            ? <div key={e.code} className="break-after-page"><Report d={e.data} /></div>
+            : <div key={e.code} className="mx-auto h-64 w-full max-w-[820px] animate-pulse rounded-card bg-card" />)}
+        </div>
+      ) : <Report d={d} />}
+    </>
+  );
+}
+
+function Report({ d }: { d: ChildData }) {
+  const { range } = useChild();
+  const first = d.child.name.split(' ')[0];
+  const attempts = attemptsIn(d, range);
+  const o = outcomes(attempts);
+  const snap = snapshot(sessionsIn(d, range));
+  const lastDay = new Date(range.to.getTime() - 86_400_000);
+
+  return (
+    <>
       <article className="mx-auto max-w-[820px] rounded-card border border-line bg-card p-8 print:border-0 print:p-0 print:shadow-none">
         <header className="flex items-start justify-between gap-4 border-b border-line pb-5">
           <div>

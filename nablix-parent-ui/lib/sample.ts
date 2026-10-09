@@ -111,35 +111,107 @@ const MC_BY_TOPIC: Record<string, string[]> = {
   'ALG-ORI-03': ['MC-WRONG-INVERSE', 'MC-ORDER-OF-UNDO', 'MC-ORDER-OF-UNDO'],
 };
 
-/** Which topic was being studied N days ago — finished topics come first. */
-function topicForDay(daysAgo: number): string {
-  if (daysAgo > 28) return 'ALG-KS3-01';
-  if (daysAgo > 12) return 'ALG-ORI-02';
-  return daysAgo % 3 === 0 ? 'ALG-ORI-02' : 'ALG-ORI-03';
+/**
+ * One sample child. Siblings share the curriculum but sit at different points
+ * in it, study at different rates and get different results, so the family
+ * screens have something real to show.
+ */
+interface Profile {
+  child: ChildData['child'];
+  seed: number;
+  /** Added to the chance of a correct answer. */
+  boost: number;
+  /** Chance of a session on a day outside the current streak. */
+  studyRate: number;
+  /** Days in a row up to yesterday with a session. */
+  streak: number;
+  /** Which topic was being studied N days ago; null = no lessons yet then. */
+  topicForDay: (daysAgo: number) => string | null;
+  /** Where this child is in each topic (applied over TOPICS). */
+  topics: Record<string, Partial<TopicProgress>>;
 }
 
-function phaseFor(topicId: string, r: () => number): Phase {
-  const t = TOPICS.find((x) => x.topic_id === topicId)!;
-  if (t.mastery_status === 'MASTERED') return r() < 0.5 ? 'PHASE_3_INDEPENDENT_PRACTICE' : 'PHASE_2_GUIDED_LEARNING';
-  return t.current_phase ?? 'PHASE_2_GUIDED_LEARNING';
+const ALL_PHASES: Phase[] = ['PHASE_0_DIAGNOSTIC', 'PHASE_1_ORIENTATION', 'PHASE_2_GUIDED_LEARNING', 'PHASE_3_INDEPENDENT_PRACTICE', 'PHASE_4_REVIEW'];
+const mastered: Partial<TopicProgress> = { mastery_status: 'MASTERED', current_phase: null, phases_completed: ALL_PHASES, recommended_next_action: null };
+const notStarted: Partial<TopicProgress> = { mastery_status: 'NOT_STARTED', current_phase: null, phases_completed: [] };
+
+const PROFILES: Profile[] = [
+  {
+    child: { student_code: 'SAMPLE-01', name: 'Riya Sharma', year_group: 'Year 8' },
+    seed: 20261009, boost: 0, studyRate: 0.62, streak: 6,
+    topicForDay: (d) => (d > 28 ? 'ALG-KS3-01' : d > 12 ? 'ALG-ORI-02' : d % 3 === 0 ? 'ALG-ORI-02' : 'ALG-ORI-03'),
+    topics: {},
+  },
+  {
+    child: { student_code: 'SAMPLE-02', name: 'Arjun Sharma', year_group: 'Year 10' },
+    seed: 77031, boost: 0.1, studyRate: 0.5, streak: 3,
+    topicForDay: (d) => (d > 30 ? 'ALG-KS3-01' : d > 18 ? 'ALG-ORI-02' : 'ALG-ORI-03'),
+    topics: {
+      'ALG-ORI-02': { ...mastered },
+      'ALG-ORI-03': {
+        mastery_status: 'IN_PROGRESS', current_phase: 'PHASE_3_INDEPENDENT_PRACTICE',
+        phases_completed: ['PHASE_0_DIAGNOSTIC', 'PHASE_1_ORIENTATION', 'PHASE_2_GUIDED_LEARNING'],
+        recommended_next_action: 'Practise word problems: turning a story into an equation.',
+      },
+    },
+  },
+  {
+    child: { student_code: 'SAMPLE-03', name: 'Anaya Sharma', year_group: 'Year 7' },
+    seed: 41207, boost: -0.06, studyRate: 0.45, streak: 2,
+    // Joined three weeks ago and is on the first topic.
+    topicForDay: (d) => (d > 20 ? null : 'ALG-KS3-01'),
+    topics: {
+      'ALG-KS3-01': {
+        mastery_status: 'IN_PROGRESS', current_phase: 'PHASE_2_GUIDED_LEARNING',
+        phases_completed: ['PHASE_0_DIAGNOSTIC', 'PHASE_1_ORIENTATION'],
+        recommended_next_action: 'Keep going with guided practice on undoing addition and subtraction.',
+      },
+      'ALG-ORI-02': { ...notStarted, recommended_next_action: 'Starts after One-step equations.' },
+      'ALG-ORI-03': { ...notStarted },
+    },
+  },
+];
+
+/** This child's version of a topic: their stage, and skill statuses to match it. */
+function topicFor(base: TopicProgress, over: Partial<TopicProgress> | undefined): TopicProgress {
+  if (!over) return base;
+  const t = { ...base, ...over };
+  if (t.mastery_status === 'MASTERED') {
+    t.micro_skills = base.micro_skills.map((m, i) => ({ ...m, status: i === base.micro_skills.length - 1 && m.status !== 'INDEPENDENTLY_VERIFIED' ? 'VERIFIED_WITH_SUPPORT' : 'INDEPENDENTLY_VERIFIED' }));
+  } else if (t.mastery_status === 'NOT_STARTED') {
+    t.micro_skills = base.micro_skills.map((m) => ({ ...m, status: 'UNKNOWN' }));
+  } else if (base.mastery_status === 'MASTERED') {
+    // A topic this child is still on: early skills strong, later ones not yet.
+    t.micro_skills = base.micro_skills.map((m, i) => ({ ...m, status: i === 0 ? 'INDEPENDENTLY_VERIFIED' : i === 1 ? 'VERIFIED_WITH_SUPPORT' : i === 2 ? 'RESCUE_REQUIRED' : 'UNKNOWN' }));
+  }
+  return t;
 }
 
-function buildSessions(today: Date): Session[] {
-  const r = rng(20261009);
+function phaseFor(topic: TopicProgress, r: () => number): Phase {
+  if (topic.mastery_status === 'MASTERED') return r() < 0.5 ? 'PHASE_3_INDEPENDENT_PRACTICE' : 'PHASE_2_GUIDED_LEARNING';
+  return topic.current_phase ?? 'PHASE_2_GUIDED_LEARNING';
+}
+
+function buildSessions(today: Date, profile: Profile, topics: TopicProgress[]): Session[] {
+  const r = rng(profile.seed);
   const sessions: Session[] = [];
   const end = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
 
   for (let daysAgo = 41; daysAgo >= 0; daysAgo--) {
-    // A six-day run up to yesterday, a rest today, gaps further back.
-    const studied = daysAgo === 0 ? false : daysAgo <= 6 ? true : r() < 0.62;
+    // A run of days up to yesterday, a rest today, gaps further back.
+    const studied = daysAgo === 0 ? false : daysAgo <= profile.streak ? true : r() < profile.studyRate;
     if (!studied) continue;
+    // A day outside the streak that breaks it would make the streak longer than intended.
+    if (daysAgo === profile.streak + 1) continue;
+    const topicId = profile.topicForDay(daysAgo);
+    if (!topicId) continue;
+    const topic = topics.find((x) => x.topic_id === topicId)!;
 
     const day = end - daysAgo * DAY;
     const start = day + (16 + Math.floor(r() * 4)) * 3_600_000 + Math.floor(r() * 50) * 60_000;
-    const topicId = topicForDay(daysAgo);
     // Accuracy and independence grow over the six weeks; hints fall.
     const progress = 1 - daysAgo / 41;
-    const pCorrect = 0.5 + 0.3 * progress;
+    const pCorrect = Math.min(0.92, Math.max(0.3, 0.5 + profile.boost + 0.3 * progress));
     const pPartial = 0.2 - 0.06 * progress;
     const qs = QUESTIONS[topicId];
     const n = 6 + Math.floor(r() * 7);
@@ -151,12 +223,12 @@ function buildSessions(today: Date): Session[] {
       const visual = r() < 0.35;
       const hint = evaluation === 'CORRECT' && r() < 0.55 + 0.3 * progress ? 0 : 1 + Math.floor(r() * (progress > 0.6 ? 1.6 : 3));
       const scaffold = hint >= 2 && r() < 0.5;
-      const t0 = Math.round(105 - 30 * progress + (r() - 0.5) * 40);
-      const skills = TOPICS.find((s) => s.topic_id === topicId)!.micro_skills;
+      const t0 = Math.round(105 - 30 * progress - 40 * profile.boost + (r() - 0.5) * 40);
+      const skills = topic.micro_skills;
       const mcs = MC_BY_TOPIC[topicId];
       attempts.push({
         question_text: qs[Math.floor(r() * qs.length)],
-        phase: phaseFor(topicId, r),
+        phase: phaseFor(topic, r),
         // Visual cues help: a wrong answer is sometimes rescued into a right one.
         evaluation: visual && evaluation === 'INCORRECT' && r() < 0.5 ? 'CORRECT' : evaluation,
         topic_id: topicId,
@@ -172,7 +244,7 @@ function buildSessions(today: Date): Session[] {
       t += t0 * 1000 + 20_000;
     }
     sessions.push({
-      session_id: `SES-${new Date(day).toISOString().slice(0, 10)}`,
+      session_id: `SES-${profile.child.student_code}-${new Date(day).toISOString().slice(0, 10)}`,
       topic_id: topicId,
       session_date: new Date(start).toISOString(),
       session_duration_seconds: Math.round((t - start) / 1000) + 120,
@@ -193,9 +265,13 @@ function buildConsents(today: Date): ConsentRecord[] {
     .concat([{ purpose: 'marketing', accepted_at: null, withdrawn_at: null }]);
 }
 
-export function sampleChildData(today = new Date()): ChildData {
-  const sessions = buildSessions(today);
-  const topics = TOPICS.map((t) => {
+export const SAMPLE_CHILDREN = PROFILES.map((p) => p.child);
+
+export function sampleChildData(today = new Date(), code = PROFILES[0].child.student_code): ChildData {
+  const profile = PROFILES.find((p) => p.child.student_code === code) ?? PROFILES[0];
+  const base = TOPICS.map((t) => topicFor(t, profile.topics[t.topic_id]));
+  const sessions = buildSessions(today, profile, base);
+  const topics = base.map((t) => {
     const mine = sessions.filter((s) => s.topic_id === t.topic_id);
     return {
       ...t,
@@ -204,7 +280,7 @@ export function sampleChildData(today = new Date()): ChildData {
     };
   });
   return {
-    child: { student_code: 'SAMPLE-01', name: 'Riya Sharma', year_group: 'Year 8' },
+    child: profile.child,
     topics,
     sessions,
     misconceptions: MISCONCEPTIONS,

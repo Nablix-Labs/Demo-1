@@ -133,3 +133,24 @@ describe('formatting', () => {
     expect(topicPercent(sampleChildData(TODAY).topics[0])).toBe(100);
   });
 });
+
+describe('sample siblings', () => {
+  it('has three children at different stages, each with their own streak', async () => {
+    const { SAMPLE_CHILDREN } = await import('./sample');
+    expect(SAMPLE_CHILDREN.map((c) => c.name)).toEqual(['Riya Sharma', 'Arjun Sharma', 'Anaya Sharma']);
+    const [riya, arjun, anaya] = SAMPLE_CHILDREN.map((c) => sampleChildData(TODAY, c.student_code));
+    expect([streak(riya, TODAY), streak(arjun, TODAY), streak(anaya, TODAY)]).toEqual([6, 3, 2]);
+    expect(arjun.topics.filter((t) => t.mastery_status === 'MASTERED').length).toBe(2);
+    expect(anaya.topics.filter((t) => t.mastery_status === 'NOT_STARTED').length).toBe(3);
+    // Anaya joined three weeks ago.
+    const oldest = Math.min(...anaya.sessions.map((s) => new Date(s.session_date).getTime()));
+    expect((TODAY.getTime() - oldest) / 86_400_000).toBeLessThanOrEqual(21);
+    // Session ids never collide across siblings.
+    const ids = [riya, arjun, anaya].flatMap((d) => d.sessions.map((s) => s.session_id));
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('falls back to the first child for an unknown code', () => {
+    expect(sampleChildData(TODAY, 'NOPE').child.name).toBe('Riya Sharma');
+  });
+});

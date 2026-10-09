@@ -229,3 +229,43 @@ function SrTable({ caption, rows }: { caption: string; rows: string[][] }) {
     </table>
   );
 }
+
+/* ── Sparkline: a small weekly-score trend for a family card ─────── */
+
+export function Sparkline({ values, labels, color = '#1F9A78', width = 140, height = 40 }: {
+  values: (number | null)[];
+  labels: string[];
+  color?: string;
+  width?: number;
+  height?: number;
+}) {
+  const [hover, setHover] = useState<number | null>(null);
+  const pad = 5;
+  const x = (i: number) => pad + ((width - pad * 2) * i) / Math.max(1, values.length - 1);
+  const y = (v: number) => pad + (height - pad * 2) * (1 - v / 100);
+  const pts = values.map((v, i) => (v === null ? null : { i, x: x(i), y: y(v), v })).filter(Boolean) as { i: number; x: number; y: number; v: number }[];
+  if (pts.length < 2) return <span className="text-[12px] font-bold text-ink-soft">Not enough weeks yet</span>;
+  const d = pts.map((p, k) => `${k ? 'L' : 'M'}${p.x},${p.y}`).join(' ');
+  const last = pts[pts.length - 1];
+  const shown = hover !== null ? pts.find((p) => p.i === hover) : null;
+  return (
+    <span className="relative inline-block">
+      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`Weekly score: ${pts.map((p) => `${labels[p.i]} ${p.v}%`).join(', ')}`}>
+        <path d={`${d} L${last.x},${height} L${pts[0].x},${height} Z`} fill={color} opacity={0.1} />
+        <path d={d} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+        {pts.map((p) => (
+          <circle key={p.i} cx={p.x} cy={p.y} r={hover === p.i || p === last ? 4 : 0} fill={color} stroke={SURFACE} strokeWidth={2} />
+        ))}
+        {values.map((_, i) => (
+          <rect key={i} x={x(i) - (width / values.length) / 2} y={0} width={width / values.length} height={height} fill="transparent"
+            onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)} />
+        ))}
+      </svg>
+      {shown && (
+        <span className="pointer-events-none absolute -top-8 z-10 -translate-x-1/2 whitespace-nowrap rounded-lg bg-ink px-2 py-1 text-[11px] font-bold text-white" style={{ left: shown.x }}>
+          {labels[shown.i]}: {shown.v}%
+        </span>
+      )}
+    </span>
+  );
+}

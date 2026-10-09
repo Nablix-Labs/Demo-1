@@ -12,6 +12,7 @@ import { listChildren, loadChild, ApiError } from './api';
 import { rangeEndingToday, type Range } from './derive';
 
 const RANGE_KEY = 'nablix.parent.range';
+const CHILD_KEY = 'nablix.parent.child';
 export const RANGES = [7, 30, 90] as const;
 
 interface Ctx {
@@ -57,7 +58,9 @@ export function ChildProvider({ children: ui }: { children: ReactNode }) {
     listChildren()
       .then((list) => {
         setKids(list);
-        setCode((c) => c ?? list[0]?.student_code ?? null);
+        let saved: string | null = null;
+        try { saved = localStorage.getItem(CHILD_KEY); } catch { /* storage blocked */ }
+        setCode((c) => c ?? list.find((k) => k.student_code === saved)?.student_code ?? list[0]?.student_code ?? null);
         if (!list.length) setError('No child is linked to this account yet.');
       })
       .catch(fail);
@@ -81,7 +84,10 @@ export function ChildProvider({ children: ui }: { children: ReactNode }) {
     needsLogin,
     range: rangeEndingToday(days),
     setDays,
-    selectChild: setCode,
+    selectChild: (next: string) => {
+      setCode(next);
+      try { localStorage.setItem(CHILD_KEY, next); } catch { /* not remembered */ }
+    },
     reload: () => setNonce((n) => n + 1),
     touch: () => setTick((t) => t + 1),
   }), [kids, data, error, needsLogin, days, setDays, tick]);

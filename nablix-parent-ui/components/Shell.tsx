@@ -6,12 +6,13 @@
  */
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import {
   LayoutDashboard, BookOpen, Map, Target, ListChecks, CalendarDays, FileText, ShieldCheck, Settings,
-  LogOut, Info, RotateCw, Download, Menu, X, PanelLeftClose, PanelLeftOpen,
+  LogOut, Info, RotateCw, Download, Menu, X, PanelLeftClose, PanelLeftOpen, Users, ChevronsUpDown, Check,
 } from 'lucide-react';
+import { childLook } from '@/lib/childColor';
 import { ChildProvider, useChild, RANGES } from '@/lib/useChild';
 import { getToken, isSample, signOut, BASE_PATH } from '@/lib/api';
 import { Segments, PillButton } from './ui';
@@ -21,6 +22,7 @@ const NAV = [
   {
     section: 'Progress',
     items: [
+      { href: '/family', label: 'Family', icon: Users, family: true },
       { href: '/', label: 'Overview', icon: LayoutDashboard },
       { href: '/topics', label: 'Topics', icon: BookOpen },
       { href: '/journey', label: 'Learning journey', icon: Map },
@@ -57,7 +59,135 @@ export function Logo({ onDark, markOnly }: { onDark?: boolean; markOnly?: boolea
   );
 }
 
-export const initials = (name: string) => name.split(/\s+/).map((p) => p[0]).slice(0, 2).join('').toUpperCase();
+const plainInitials = (name: string) => name.split(/\s+/).map((p) => p[0]).slice(0, 2).join('').toUpperCase();
+
+/**
+ * Avatar letters. Siblings usually share a surname, so Arjun and Anaya Sharma
+ * would both be "AS"; when initials clash within the family, use the first two
+ * letters of the first name instead ("Ar", "An").
+ */
+export function initials(name: string, family: string[] = []): string {
+  const mine = plainInitials(name);
+  const clash = family.some((other) => other !== name && plainInitials(other) === mine);
+  if (!clash) return mine;
+  const first = name.trim().split(/\s+/)[0] ?? name;
+  return first.slice(0, 1).toUpperCase() + first.slice(1, 2).toLowerCase();
+}
+
+/**
+ * The child this portal is showing, and the way to switch to a sibling.
+ *
+ * One child: a plain card. Several: the card opens a list of every child, each
+ * in their own colour, with a link to the family view. In the collapsed rail it
+ * is the avatars, stacked.
+ */
+function ChildSwitcher({ rail, onPicked }: { rail: boolean; onPicked: () => void }) {
+  const { data, children: kids, selectChild } = useChild();
+  const [open, setOpen] = useState(false);
+  // In the rail the list sits beside the sidebar, which clips overflow, so it
+  // is positioned against the viewport instead.
+  const [railPos, setRailPos] = useState<{ top: number; left: number } | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent | KeyboardEvent) => {
+      if (e instanceof KeyboardEvent ? e.key === 'Escape' : !ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', close);
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', close); };
+  }, [open]);
+  if (!data) return null;
+  const index = Math.max(0, kids.findIndex((k) => k.student_code === data.child.student_code));
+  const many = kids.length > 1;
+  const avatar = (name: string, i: number, size = 'h-10 w-10 text-[13px]') => (
+    <span className={clsx('flex flex-shrink-0 items-center justify-center rounded-full font-black ring-2 ring-cream', size, childLook(i).avatar)}>
+      {initials(name, kids.map((k) => k.name))}
+    </span>
+  );
+
+  return (
+    <div ref={ref} className="relative mt-5">
+      <button
+        type="button"
+        disabled={!many}
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          setRailPos({ top: r.top, left: r.right + 12 });
+          setOpen((o) => !o);
+        }}
+        aria-haspopup={many ? 'listbox' : undefined}
+        aria-expanded={many ? open : undefined}
+        aria-label={many ? `Showing ${data.child.name}. Switch child` : data.child.name}
+        title={rail ? `${data.child.name}, ${data.child.year_group}` : undefined}
+        className={clsx(
+          'flex w-full items-center gap-3 rounded-[16px] text-left transition-colors',
+          rail ? 'justify-center py-1' : 'bg-card px-2.5 py-2.5',
+          many && !rail && 'hover:bg-white',
+        )}
+      >
+        {rail && many ? (
+          <span className="flex flex-col items-center -space-y-3">
+            {avatar(data.child.name, index)}
+            {kids.filter((k) => k.student_code !== data.child.student_code).slice(0, 2).map((k) => (
+              <span key={k.student_code} className="scale-75 opacity-90">{avatar(k.name, kids.indexOf(k))}</span>
+            ))}
+          </span>
+        ) : avatar(data.child.name, index)}
+        {!rail && (
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[14px] font-extrabold text-ink">{data.child.name}</span>
+            <span className="block text-[12px] font-bold text-ink-soft">
+              {data.child.year_group}{many ? ` · ${kids.length} children` : ''}
+            </span>
+          </span>
+        )}
+        {!rail && many && <ChevronsUpDown size={16} className="flex-shrink-0 text-ink-soft" aria-hidden />}
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          aria-label="Your children"
+          className={clsx(
+            'z-50 rounded-[20px] bg-card p-2 shadow-[0_18px_50px_rgba(31,29,26,0.18)] ring-1 ring-line',
+            // Expanded: the sidebar's own width (it clips anything wider).
+            rail ? 'fixed w-[260px]' : 'absolute inset-x-0 top-full mt-2',
+          )}
+          style={rail && railPos ? { top: railPos.top, left: railPos.left } : undefined}
+        >
+          <p className="px-3 pb-1.5 pt-1 text-[11px] font-extrabold uppercase tracking-[0.08em] text-ink-soft/70">Your children</p>
+          {kids.map((k, i) => {
+            const on = k.student_code === data.child.student_code;
+            return (
+              <button
+                key={k.student_code}
+                role="option"
+                aria-selected={on}
+                onClick={() => { selectChild(k.student_code); setOpen(false); onPicked(); }}
+                className={clsx('flex w-full items-center gap-3 rounded-[14px] px-2.5 py-2 text-left transition-colors', on ? 'bg-cream' : 'hover:bg-cream')}
+              >
+                {avatar(k.name, i, 'h-9 w-9 text-[12px]')}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[14px] font-extrabold text-ink">{k.name}</span>
+                  <span className="block text-[12px] font-bold text-ink-soft">{k.year_group}</span>
+                </span>
+                {on && <Check size={16} strokeWidth={2.6} className="text-teal" aria-hidden />}
+              </button>
+            );
+          })}
+          <Link
+            href="/family"
+            onClick={() => { setOpen(false); onPicked(); }}
+            className="mt-1 flex items-center justify-center gap-2 rounded-[14px] bg-ink px-3 py-2.5 text-[13px] font-extrabold text-white"
+          >
+            <Users size={15} aria-hidden /> See the whole family
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
  * Collapsible on desktop (an icon rail, remembered per browser); a drawer on
@@ -71,7 +201,7 @@ function Sidebar({ open, onClose, collapsed, onToggle }: {
   onToggle: () => void;
 }) {
   const path = usePathname();
-  const { data } = useChild();
+  const { data, children: kids } = useChild();
   const active = (href: string) => (href === '/' ? path === '/' : path.startsWith(href));
   // The drawer on phones is always full width; only the desktop rail collapses.
   const rail = collapsed && !open;
@@ -96,22 +226,7 @@ function Sidebar({ open, onClose, collapsed, onToggle }: {
         </button>
       </div>
 
-      {data && (
-        <div
-          className={clsx('mt-5 flex items-center gap-3 rounded-[16px]', rail ? 'justify-center' : 'bg-card px-2.5 py-2.5')}
-          title={rail ? `${data.child.name}, ${data.child.year_group}` : undefined}
-        >
-          <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-mustard text-[13px] font-black text-ink">
-            {initials(data.child.name)}
-          </span>
-          {!rail && (
-            <span className="min-w-0">
-              <span className="block truncate text-[14px] font-extrabold text-ink">{data.child.name}</span>
-              <span className="block text-[12px] font-bold text-ink-soft">{data.child.year_group}</span>
-            </span>
-          )}
-        </div>
-      )}
+      {data && <ChildSwitcher rail={rail} onPicked={onClose} />}
 
       <nav className="mt-5 flex flex-col gap-5" aria-label="Main">
         {NAV.map(({ section, items }) => (
@@ -119,7 +234,7 @@ function Sidebar({ open, onClose, collapsed, onToggle }: {
             {rail
               ? <span aria-hidden className="mx-auto mb-1 h-px w-6 bg-line" />
               : <span className="mb-1 px-3 text-[11px] font-extrabold uppercase tracking-[0.08em] text-ink-soft/70">{section}</span>}
-            {items.map(({ href, label, icon: Icon }) => {
+            {items.filter((item) => !('family' in item) || kids.length > 1).map(({ href, label, icon: Icon }) => {
               const on = active(href);
               return (
                 <Link
@@ -166,23 +281,37 @@ function Sidebar({ open, onClose, collapsed, onToggle }: {
 }
 
 function Topbar({ onMenu }: { onMenu: () => void }) {
-  const { children: kids, data, range, setDays, selectChild } = useChild();
+  const { range, setDays, children: kids, data, selectChild } = useChild();
   return (
     <div className="no-print mb-6 flex flex-wrap items-center gap-3">
       <button className="rounded-full bg-card p-2.5 text-ink lg:hidden" onClick={onMenu} aria-label="Open menu">
         <Menu size={18} />
       </button>
+      {kids.length > 1 && data && (
+        <div className="flex items-center gap-1 rounded-full bg-card p-1" role="group" aria-label="Switch child">
+          {kids.map((k, i) => {
+            const on = k.student_code === data.child.student_code;
+            return (
+              <button
+                key={k.student_code}
+                onClick={() => selectChild(k.student_code)}
+                aria-pressed={on}
+                title={`${k.name}, ${k.year_group}`}
+                className={clsx(
+                  'flex items-center gap-2 rounded-full p-1 text-[13px] font-extrabold transition-colors',
+                  on ? 'bg-cream pr-3 text-ink' : 'text-ink-soft hover:bg-cream',
+                )}
+              >
+                <span className={clsx('flex h-8 w-8 items-center justify-center rounded-full text-[11px] font-black', childLook(i).avatar, !on && 'opacity-70')}>
+                  {initials(k.name, kids.map((x) => x.name))}
+                </span>
+                {on && k.name.split(' ')[0]}
+              </button>
+            );
+          })}
+        </div>
+      )}
       <div className="ml-auto flex flex-wrap items-center gap-2">
-        {kids.length > 1 && (
-          <select
-            aria-label="Child"
-            value={data?.child.student_code}
-            onChange={(e) => selectChild(e.target.value)}
-            className="rounded-full bg-card px-4 py-2.5 text-[13.5px] font-extrabold text-ink"
-          >
-            {kids.map((k) => <option key={k.student_code} value={k.student_code}>{k.name}</option>)}
-          </select>
-        )}
         <div className="w-[300px] rounded-full bg-card p-1">
           <Segments label="Date range" options={RANGES.map((d) => ({ value: d, label: `${d} days` }))} value={range.days as 7 | 30 | 90} onChange={setDays} />
         </div>

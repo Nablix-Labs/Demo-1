@@ -7,7 +7,7 @@
  *    parent_guardian login. Switch to it once they exist; nothing else changes.
  */
 import type { Child, ChildData, ConsentPurpose, ConsentRecord } from './types';
-import { sampleChildData } from './sample';
+import { sampleChildData, SAMPLE_CHILDREN } from './sample';
 
 export const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? '';
 export const MODE = (process.env.NEXT_PUBLIC_PARENT_API_MODE ?? 'sample') as 'sample' | 'http';
@@ -85,17 +85,20 @@ async function send<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-// In sample mode consent changes are kept for the tab, so the controls work.
-let sampleCache: ChildData | null = null;
-const sample = () => (sampleCache ??= sampleChildData());
+// In sample mode each child is generated once per tab, so consent changes stick.
+const sampleCache = new Map<string, ChildData>();
+const sample = (code: string) => {
+  if (!sampleCache.has(code)) sampleCache.set(code, sampleChildData(new Date(), code));
+  return sampleCache.get(code)!;
+};
 
 export async function listChildren(): Promise<Child[]> {
-  if (isSample) return [sample().child];
+  if (isSample) return SAMPLE_CHILDREN;
   return get<Child[]>('/parent/children');
 }
 
 export async function loadChild(code: string): Promise<ChildData> {
-  if (isSample) return sample();
+  if (isSample) return sample(code);
   const c = encodeURIComponent(code);
   const [children, topics, sessions, misconceptions, consents] = await Promise.all([
     listChildren(),
@@ -112,7 +115,7 @@ export async function loadChild(code: string): Promise<ChildData> {
 /** Grant or withdraw one optional consent. Mandatory ones withdraw the account. */
 export async function setConsent(code: string, purpose: ConsentPurpose, granted: boolean): Promise<ConsentRecord> {
   if (isSample) {
-    const rec = sample().consents.find((x) => x.purpose === purpose)!;
+    const rec = sample(code).consents.find((x) => x.purpose === purpose)!;
     const now = new Date().toISOString();
     Object.assign(rec, granted ? { accepted_at: now, withdrawn_at: null } : { withdrawn_at: now });
     return { ...rec };
