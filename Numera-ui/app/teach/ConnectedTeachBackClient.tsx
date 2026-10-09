@@ -247,6 +247,7 @@ export default function ConnectedTeachBackClient() {
 
   const voice = useVoiceTurn({
     onTurnEnd: (transcript, confidence) => {
+      voice.stop();
       setListening(false);
       if (transcript) void submitStandard(transcript, 'VOICE', confidence);
     },
@@ -320,7 +321,7 @@ export default function ConnectedTeachBackClient() {
 
   const toggleMic = async () => {
     if (mode === 'standard') {
-      if (voice.active) voice.stop();
+      if (voice.active) voice.finish();
       else { stopTutorSpeech(); voice.start(); setListening(true); }
       return;
     }
@@ -379,9 +380,9 @@ export default function ConnectedTeachBackClient() {
             {(['standard', 'realtime'] as const).map((m) => (
               <button
                 key={m}
-                disabled={busy || listening}
+                disabled={busy || speaking || listening || pending !== null}
                 aria-pressed={mode === m}
-                onClick={() => { connection.current?.close(); connection.current = null; setConnected(false); setMode(m); setError(null); }}
+                onClick={() => { voice.stop(); connection.current?.close(); connection.current = null; setConnected(false); setMode(m); setError(null); }}
                 className={cn('rounded-full px-3 py-1.5 transition-colors', mode === m ? 'bg-white text-focus-navy shadow-sm' : 'text-[#9A7B45]')}
               >
                 {m === 'standard' ? 'Standard' : 'Live voice'}
