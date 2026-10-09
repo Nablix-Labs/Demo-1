@@ -25,6 +25,7 @@ from app.models.session import SessionRecord
 from app.services import session_service
 from tests.test_session_events import _event_response
 from tests.test_teach_back_engine import teach_back_content
+from tests.test_teach_back_openai_smoke import CURIOUS_STUDENT_TURNS, assert_curiosity_without_grading, assert_question_answered, repeated_structure_content
 
 
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
@@ -553,3 +554,93 @@ def test_disabling_realtime_preserves_standard_teachback(upstream: dict[str, obj
     standard = client.post("/interaction", json=submission(session_id, "TURN-001", "A number", "TEXT", "TEACH_BACK_SUBMISSION"))
     assert standard.status_code == 200, standard.text
     assert upstream["engine_calls"] == 1
+
+
+
+def test_live_realtime_curious_student_conversation(upstream: dict[str, object], monkeypatch: pytest.MonkeyPatch) -> None:
+    if os.getenv("NABLIX_RUN_REALTIME_SMOKE") != "true":
+        pytest.skip("Set NABLIX_RUN_REALTIME_SMOKE=true to run the billed Realtime conversation.")
+    key = os.getenv("NABLIX_OPENAI_API_KEY")
+    if not key:
+        pytest.fail("NABLIX_OPENAI_API_KEY is required for the live Realtime conversation.")
+    monkeypatch.setattr("app.services.teach_back_realtime.get_settings", lambda: Settings(openai_api_key=key))
+    session_id = upstream["session_id"]
+    content = repeated_structure_content()
+    content = content.model_copy(update={"state": content.state.model_copy(update={"status": "IN_PROGRESS"})})
+    upstream["content"].update(content.model_dump())
+    session = session_service._sessions[session_id]
+    session_service._sessions[session_id] = session.model_copy(update={"teach_back_content": content, "conversation_history": []})
+
+    async def converse() -> None:
+        recordings: list[bytes] = []
+        async with AsyncOpenAI(api_key=key) as audio_client:
+            for message, _, _ in CURIOUS_STUDENT_TURNS:
+                audio = await audio_client.audio.speech.create(
+                    model="gpt-4o-mini-tts", voice="alloy", input=message, response_format="pcm",
+                )
+                recordings.append(audio.content)
+        started = client.post("/voice/teach-back/session", json={"session_id": session_id, "student_id": "ST001"})
+        assert started.status_code == 200, started.text
+        context = started.json()["context"]
+        model = load_teach_back_config().realtime.model
+        async with connect(f"wss://api.openai.com/v1/realtime?model={model}",
+                           extra_headers={"Authorization": f"Bearer {started.json()['client_secret']}"}, open_timeout=20) as connection:
+            for index, ((message, verdict, current), audio) in enumerate(zip(CURIOUS_STUDENT_TURNS, recordings, strict=True)):
+                assert context["micro_skill_id"] == current
+                supplied = json.loads(context["instructions"].split("<SESSION_CONTEXT>\n", 1)[1].split("\n</SESSION_CONTEXT>", 1)[0])
+                expected_action = "NEXT_MICRO_SKILL" if current == "T02.M1" else "MOVE_TO_PHASE_2"
+                assert supplied["required_actions"]["UNDERSTOOD"] == expected_action
+                transcript: str | None = None
+                confidence: float | None = None
+                reply: TeachBackReply | None = None
+                call_id: str | None = None
+                await connection.send(json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(audio).decode("ascii")}))
+                await connection.send(json.dumps({"type": "input_audio_buffer.commit"}))
+                async with asyncio.timeout(started.json()["response_timeout_seconds"]):
+                    async for raw in connection:
+                        event = json.loads(raw)
+                        if event["type"] == "error":
+                            raise RuntimeError(f"Realtime rejected the conversation: {event['error']}")
+                        if event["type"] == "conversation.item.input_audio_transcription.completed":
+                            transcript = event["transcript"]
+                            probabilities = event["logprobs"]
+                            assert probabilities
+                            confidence = math.exp(sum(entry["logprob"] for entry in probabilities) / len(probabilities))
+                            await connection.send(json.dumps({"type": "response.create", "response": {"instructions": context["instructions"]}}))
+                        if event["type"] == "response.function_call_arguments.done":
+                            assert event["name"] == context["tool_name"]
+                            reply = TeachBackReply.model_validate_json(event["arguments"])
+                            call_id = event["call_id"]
+                        if event["type"] == "response.done":
+                            assert event["response"]["status"] == "completed"
+                            break
+                assert transcript is not None and confidence is not None and reply is not None and call_id is not None
+                print(json.dumps({"skill": current, "student": transcript, "reply": reply.model_dump()}, ensure_ascii=False))
+                assert reply.evaluation.understanding_status == verdict, reply.model_dump()
+                assert_curiosity_without_grading(reply)
+                assert_question_answered(message, reply)
+                result = realtime_result(session_id, f"TURN-CURIOUS-{index}", transcript, verdict)
+                result["reply"] = reply.model_dump()
+                result["interaction"]["transcript_confidence"] = confidence
+                recorded = client.post("/voice/teach-back/result", json=result)
+                assert recorded.status_code == 200, {"error": recorded.text, "reply": reply.model_dump()}
+                await connection.send(json.dumps({"type": "conversation.item.create", "item": {
+                    "type": "function_call_output", "call_id": call_id,
+                    "output": json.dumps({"accepted": True, "tutor_message": recorded.json()["message"]}),
+                }}))
+                if index < len(CURIOUS_STUDENT_TURNS) - 1:
+                    refreshed = client.post("/voice/teach-back/context", json={"session_id": session_id, "student_id": "ST001"})
+                    assert refreshed.status_code == 200, refreshed.text
+                    context = refreshed.json()
+                    await connection.send(json.dumps({"type": "session.update", "session": {"type": "realtime", "instructions": context["instructions"]}}))
+                    async with asyncio.timeout(started.json()["response_timeout_seconds"]):
+                        async for raw in connection:
+                            event = json.loads(raw)
+                            if event["type"] == "error":
+                                raise RuntimeError(f"Realtime rejected the updated context: {event['error']}")
+                            if event["type"] == "session.updated":
+                                break
+    asyncio.run(converse())
+    assert session_service._sessions[session_id].current_phase == "GUIDED_PRACTICE"
+    assert [event["event_type"] for event in upstream["events"]][-2:] == ["TEACH_BACK_TURN_RECORDED", "TEACH_BACK_COMPLETED"]
+    assert upstream["engine_calls"] == 0

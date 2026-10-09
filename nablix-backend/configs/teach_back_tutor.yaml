@@ -1,9 +1,9 @@
 max_failed_explanations: 2
-opening_message: "Your turn to be the teacher! What is the main idea behind {skill_name}, in your own words?"
+opening_message: "I'm your curious student for a moment. Can you teach me the main idea behind {skill_name}, in your own words?"
 return_to_orientation_message: "Let's revisit this idea together, then you can teach it back to me."
 voice_clarification_message: "I didn't catch that clearly. Could you say the idea again?"
-acknowledgement_message: "Tell me the idea in your own words, as if I'm learning it from you."
-completion_message: "You've explained the ideas we needed. Let's use them in some problems."
+acknowledgement_message: "Help me understand the idea in your own words, as if I'm learning it from you."
+completion_message: "I follow the ideas you've explained. Let's use them together in some problems."
 invalid_response_message: "The tutor could not produce a valid Teach-Back reply. Please try again."
 non_explanation_patterns:
   - '(?:(?:okay|ok|yes|right)[, ]+)?(?:please )?next(?: (?:tell me|please|one|concept))?[.!?, ]*'

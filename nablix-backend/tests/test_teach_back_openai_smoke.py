@@ -1,12 +1,13 @@
 import json
 import os
+import re
 
 import pytest
 
 from app.ai_engine.classifier import build_openai_ai_engine_client
 from app.ai_engine.teach_back import build_teach_back_context, generate_teach_back_reply, validate_teach_back_reply
 from app.core.config import Settings
-from app.models.teach_back import TeachBackPayload
+from app.models.teach_back import TeachBackPayload, TeachBackReply
 from app.models.adapters import ConversationMessage
 from tests.test_teach_back_engine import teach_back_content
 
@@ -70,35 +71,87 @@ def test_live_teach_back_navigation_is_not_evidence(message: str, monkeypatch: p
     print(json.dumps({"student": message, "reply": parsed.model_dump()}, ensure_ascii=False))
 
 
-def test_live_teach_back_advances_between_distinct_concepts(monkeypatch: pytest.MonkeyPatch) -> None:
+CURIOUS_STUDENT_TURNS: tuple[tuple[str, str | None, str], ...] = (
+    ("Why are we comparing the starting numbers?", None, "T02.M1"),
+    ("So then, um, I lost my words.", None, "T02.M1"),
+    ("The starting number always stays fixed, and the operation changes each time.", "MISCONCEPTION", "T02.M1"),
+    ("The starting number changes and plus four stays the same.", "UNDERSTOOD", "T02.M1"),
+    ("What do you mean by a letter here?", None, "T02.M2"),
+    ("N is, um, I haven't finished explaining yet.", None, "T02.M2"),
+    ("N is the name of an object, like apples, rather than a number.", "MISCONCEPTION", "T02.M2"),
+    ("N represents the starting number that changes, so I write n plus four.", "UNDERSTOOD", "T02.M2"),
+)
+
+
+def repeated_structure_content() -> TeachBackPayload:
+    raw = teach_back_content()
+    raw["targets"][0].update(
+        micro_skill_definition="Recognise a fixed operation across changing starting quantities.",
+        expected_concept="In 4+4 and 5+4, the starting number changes and adding 4 stays fixed.",
+        known_misconceptions=[{"error_code": "ERR-FIXED", "description": "Treating the starting number as fixed and the operation as changing."}],
+    )
+    raw["targets"][1].update(
+        micro_skill_definition="Use a letter to represent a changing quantity.",
+        expected_concept="A letter represents the changing starting quantity in n+4.",
+    )
+    raw["phase1_context"]["teaching_summary"][0].update(skill_name="Recognise repeated structure", summary="The starting number varies but adding four stays fixed.")
+    raw["phase1_context"]["teaching_summary"][1].update(skill_name="Represent changing quantities", summary="In n+4, n represents a changing starting number.")
+    raw["worked_example_context"]["worked_examples"][0]["steps"][0].update(screen_content="4+4, 5+4, n+4", narration_text="Adding four stays fixed; n represents the changing starting number.")
+    return TeachBackPayload.model_validate(raw)
+
+
+def assert_curiosity_without_grading(reply: TeachBackReply) -> None:
+    for message in (reply.tutor_message, reply.tutor_message_voice):
+        assert re.search(r"\b(?:i|me|my)\b", message, flags=re.IGNORECASE), reply.model_dump()
+        assert not any(phrase in message.lower() for phrase in (
+            "great job", "well done", "you've got the idea", "you’ve got the idea", "that's correct",
+            "that’s correct", "now let's explore", "now let’s explore", "remember,",
+        )), reply.model_dump()
+
+
+def assert_question_answered(message: str, reply: TeachBackReply) -> None:
+    required_words = {
+        CURIOUS_STUDENT_TURNS[0][0]: ("fixed", "same"),
+        CURIOUS_STUDENT_TURNS[4][0]: ("number", "quantity"),
+    }.get(message)
+    if required_words is not None:
+        for wording in (reply.tutor_message, reply.tutor_message_voice):
+            answer = " ".join(sentence for sentence in re.findall(r"[^.!?]+[.!?]", wording.lower()) if not sentence.endswith("?"))
+            assert any(word in answer for word in required_words), reply.model_dump()
+            assert "couldn't follow" not in answer and "couldn’t follow" not in answer, reply.model_dump()
+
+
+def test_standard_curiosity_through_complete_conversation(monkeypatch: pytest.MonkeyPatch) -> None:
     if os.getenv("NABLIX_RUN_OPENAI_SMOKE") != "true":
         pytest.skip("Set NABLIX_RUN_OPENAI_SMOKE=true to run the billed AI smoke evaluation.")
     settings = Settings(use_openai_ai_engine=True)
     if not settings.openai_api_key:
         pytest.fail("NABLIX_OPENAI_API_KEY is required for the live AI evaluation.")
     monkeypatch.setattr("app.ai_engine.teach_back.get_settings", lambda: settings)
-    raw = teach_back_content()
-    raw["targets"][0]["micro_skill_definition"] = "Recognise a fixed operation across changing starting quantities."
-    raw["targets"][0]["expected_concept"] = "In 4+4 and 5+4, the starting number changes and adding 4 stays fixed."
-    raw["targets"][1]["micro_skill_definition"] = "Use a letter to represent a changing quantity."
-    raw["targets"][1]["expected_concept"] = "A letter represents the changing starting quantity in n+4."
-    raw["phase1_context"]["teaching_summary"][0].update(skill_name="Recognise repeated structure", summary="The starting number varies but adding four stays fixed.")
-    raw["phase1_context"]["teaching_summary"][1].update(skill_name="Represent changing quantities", summary="In n+4, n represents a changing starting number.")
-    raw["worked_example_context"]["worked_examples"][0]["steps"][0].update(screen_content="4+4, 5+4, n+4", narration_text="Adding four stays fixed; n represents the changing starting number.")
-    first_message = "The starting number changes and plus four stays the same."
-    first = generate_teach_back_reply(TeachBackPayload.model_validate(raw), first_message, "TEXT", None, [])
-    assert first.evaluation.understanding_status == "UNDERSTOOD", first.model_dump()
-    assert first.next_action == "NEXT_MICRO_SKILL"
-    assert "letter" in first.tutor_message.lower(), first.model_dump()
-    history = [ConversationMessage(role="user", content=first_message),
-               ConversationMessage(role="assistant", content=first.tutor_message)]
-    raw["state"]["completed_micro_skill_ids"] = ["T02.M1"]
-    raw["state"]["current_micro_skill_id"] = "T02.M2"
-    raw["state"]["status"] = "IN_PROGRESS"
-    content = TeachBackPayload.model_validate(raw)
-    navigation = generate_teach_back_reply(content, "next tell me", "TEXT", None, history)
-    assert navigation.evaluation.understanding_status is None
-    final = generate_teach_back_reply(content, "N represents the starting number that changes, so I write n plus four.", "TEXT", None, history)
-    assert final.evaluation.understanding_status == "UNDERSTOOD", final.model_dump()
-    assert final.next_action == "MOVE_TO_PHASE_2"
-    print(json.dumps({"first": first.model_dump(), "navigation": navigation.model_dump(), "final": final.model_dump()}, ensure_ascii=False))
+    content = repeated_structure_content()
+    history: list[ConversationMessage] = []
+    for message, verdict, current in CURIOUS_STUDENT_TURNS:
+        assert content.state.current_micro_skill_id == current
+        reply = generate_teach_back_reply(content, message, "TEXT", None, history)
+        assert reply.evaluation.understanding_status == verdict, reply.model_dump()
+        assert_curiosity_without_grading(reply)
+        assert_question_answered(message, reply)
+        history = [*history, ConversationMessage(role="user", content=message),
+                   ConversationMessage(role="assistant", content=reply.tutor_message)]
+        print(json.dumps({"skill": current, "student": message, "reply": reply.model_dump()}, ensure_ascii=False))
+        if verdict == "UNDERSTOOD":
+            completed = [*content.state.completed_micro_skill_ids, current]
+            remaining = [skill for skill in content.state.target_micro_skill_ids if skill not in completed]
+            assert reply.next_action == ("NEXT_MICRO_SKILL" if remaining else "MOVE_TO_PHASE_2")
+            if remaining:
+                assert "letter" in reply.tutor_message.lower(), reply.model_dump()
+            content = content.model_copy(update={"state": content.state.model_copy(update={
+                "completed_micro_skill_ids": completed, "current_micro_skill_id": remaining[0] if remaining else None,
+                "failed_explanation_count": 0, "status": "IN_PROGRESS" if remaining else "COMPLETED",
+            })})
+        elif verdict == "MISCONCEPTION":
+            assert reply.next_action == "ASK_REEXPLANATION"
+            content = content.model_copy(update={"state": content.state.model_copy(update={
+                "failed_explanation_count": content.state.failed_explanation_count + 1,
+            })})
+    assert content.state.completed_micro_skill_ids == content.state.target_micro_skill_ids
