@@ -33,6 +33,9 @@ async def realtime_teach_back_context(
     if current is None:
         raise HTTPException(status_code=409, detail="Teach-Back has no unfinished target.")
     context = build_teach_back_context(content, "", "VOICE", None)
+    # The student utterance arrives over the audio connection after this context is issued.
+    context.pop("student_input")
+    context.pop("input_requires_clarification")
     rules = load_classifier_rules()
     limit = rules.conversation_rules.max_recent_messages
     context["recent_history"] = [message.model_dump() for message in session.conversation_history[-limit:]] if limit else []

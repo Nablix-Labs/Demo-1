@@ -34,9 +34,9 @@ class TeachBackReply(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     evaluation: TeachBackEvaluation
+    next_action: TeachBackAction
     tutor_message: str = Field(min_length=1)
     tutor_message_voice: str = Field(min_length=1)
-    next_action: TeachBackAction
 
 
 class TeachBackMisconception(BaseModel):

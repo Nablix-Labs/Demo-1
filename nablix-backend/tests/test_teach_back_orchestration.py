@@ -84,11 +84,13 @@ def upstream(monkeypatch: pytest.MonkeyPatch, teach_session: tuple[str, list[dic
                     input_source: str, transcript_confidence: float | None, history: list[ConversationMessage]) -> TeachBackReply:
         control["engine_calls"] += 1
         verdict = None if student_input == "Why?" or transcript_confidence == 0.1 else "MISCONCEPTION" if student_input == "An object" else "UNDERSTOOD"
+        action = teach_back_action(content, verdict) if verdict is not None else control["discussion_action"]
+        message = "A letter stands for a number." if action in {"MOVE_TO_PHASE_2", "RETURN_TO_ORIENTATION"} else "A letter stands for a number. Can you explain that?"
         return TeachBackReply.model_validate({
             "evaluation": {"understanding_status": verdict, "misconception_detected": verdict == "MISCONCEPTION",
                            "error_code": "ERR-LETTER" if verdict == "MISCONCEPTION" else None, "unmapped_misconception_description": None},
-            "tutor_message": "A letter stands for a number. Can you explain that?", "tutor_message_voice": "A letter stands for a number. Can you explain that?",
-            "next_action": teach_back_action(content, verdict) if verdict is not None else control["discussion_action"]})
+            "tutor_message": message, "tutor_message_voice": message,
+            "next_action": action})
 
     async def post(adapter_name: str, url: str, payload: dict[str, object], headers: dict[str, str], timeout_seconds: int, retry_count: int) -> dict[str, object]:
         events.append(deepcopy(payload))
@@ -375,6 +377,8 @@ def test_orientation_waits_for_second_failure_receipt(upstream: dict[str, object
 def realtime_result(session_id: str, turn: str, message: str, verdict: str | None) -> dict[str, object]:
     content = session_service._sessions[session_id].teach_back_content
     assert content is not None
+    action = teach_back_action(content, verdict)
+    response_text = "A letter represents a number." if action in {"MOVE_TO_PHASE_2", "RETURN_TO_ORIENTATION"} else "A letter represents a number. Can you explain that?"
     return {
         "interaction": {**submission(session_id, turn, message, "VOICE", "TEACH_BACK_SUBMISSION"), "question_id": None},
         "teach_back_id": content.teach_back_id,
@@ -383,9 +387,9 @@ def realtime_result(session_id: str, turn: str, message: str, verdict: str | Non
             "evaluation": {"understanding_status": verdict, "misconception_detected": verdict == "MISCONCEPTION",
                            "error_code": "ERR-LETTER" if verdict == "MISCONCEPTION" else None,
                            "unmapped_misconception_description": None},
-            "tutor_message": "A letter represents a number. Can you explain that?",
-            "tutor_message_voice": "A letter represents a number. Can you explain that?",
-            "next_action": teach_back_action(content, verdict),
+            "tutor_message": response_text,
+            "tutor_message_voice": response_text,
+            "next_action": action,
         },
     }
 
@@ -419,7 +423,7 @@ def test_realtime_preserves_failure_limit_and_discussion(upstream: dict[str, obj
     assert upstream["engine_calls"] == 0
 
 
-@pytest.mark.parametrize("message,confidence", [("okay", 0.9), ("Unclear", 0.1), ("", None)])
+@pytest.mark.parametrize("message,confidence", [("next tell me", 0.9), ("I'm ready for the next one", 0.9), ("okay next please", 0.9), ("okay", 0.9), ("Unclear", 0.1), ("", None)])
 def test_realtime_input_checks_override_claimed_understanding(upstream: dict[str, object], message: str, confidence: float | None) -> None:
     session_id = upstream["session_id"]
     result = realtime_result(session_id, "TURN-001", message, "UNDERSTOOD")
@@ -469,7 +473,14 @@ def test_realtime_rejects_stale_target_canvas_and_unauthenticated_calls(upstream
     assert upstream["engine_calls"] == 0
 
 
-def test_live_realtime_teach_back_tool(upstream: dict[str, object], monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("message,verdict", [
+    ("A letter stands for a number we do not know yet.", "UNDERSTOOD"),
+    ("Next tell me.", None),
+    ("Why do we use a letter instead of a number?", None),
+    ("The letter is the name of an object, like apples.", "MISCONCEPTION"),
+])
+def test_live_realtime_teach_back_tool(upstream: dict[str, object], monkeypatch: pytest.MonkeyPatch,
+                                     message: str, verdict: str | None) -> None:
     if os.getenv("NABLIX_RUN_REALTIME_SMOKE") != "true":
         pytest.skip("Set NABLIX_RUN_REALTIME_SMOKE=true to run the billed Realtime smoke check.")
     key = os.getenv("NABLIX_OPENAI_API_KEY")
@@ -477,11 +488,6 @@ def test_live_realtime_teach_back_tool(upstream: dict[str, object], monkeypatch:
         pytest.fail("NABLIX_OPENAI_API_KEY is required for the live Realtime smoke check.")
     monkeypatch.setattr("app.services.teach_back_realtime.get_settings", lambda: Settings(openai_api_key=key))
     session_id = upstream["session_id"]
-    started = client.post("/voice/teach-back/session", json={"session_id": session_id, "student_id": "ST001"})
-    assert started.status_code == 200, started.text
-    secret = started.json()["client_secret"]
-    context = started.json()["context"]
-    message = "A letter stands for a number we do not know yet."
 
     async def evaluate() -> tuple[str, float, TeachBackReply]:
         # Use the same configured model and short-lived credential as the browser.
@@ -490,6 +496,10 @@ def test_live_realtime_teach_back_tool(upstream: dict[str, object], monkeypatch:
             audio = await audio_client.audio.speech.create(
                 model="gpt-4o-mini-tts", voice="alloy", input=message, response_format="pcm",
             )
+        started = client.post("/voice/teach-back/session", json={"session_id": session_id, "student_id": "ST001"})
+        assert started.status_code == 200, started.text
+        secret = started.json()["client_secret"]
+        context = started.json()["context"]
         transcript: str | None = None
         confidence: float | None = None
         reply: TeachBackReply | None = None
@@ -518,14 +528,14 @@ def test_live_realtime_teach_back_tool(upstream: dict[str, object], monkeypatch:
         raise RuntimeError("Realtime closed without a Teach-Back tool result.")
 
     transcript, confidence, reply = asyncio.run(evaluate())
-    assert "letter" in transcript.lower() and "number" in transcript.lower()
-    assert reply.evaluation.understanding_status == "UNDERSTOOD"
-    result = realtime_result(session_id, "TURN-001", transcript, "UNDERSTOOD")
+    assert transcript.strip()
+    assert reply.evaluation.understanding_status == verdict, reply.model_dump()
+    result = realtime_result(session_id, "TURN-001", transcript, verdict)
     result["reply"] = reply.model_dump()
     result["interaction"]["transcript_confidence"] = confidence
     recorded = client.post("/voice/teach-back/result", json=result)
-    assert recorded.status_code == 200, recorded.text
-    assert session_service._sessions[session_id].teach_back_content.state.completed_micro_skill_ids == ["T02.M1"]
+    assert recorded.status_code == 200, {"error": recorded.text, "reply": reply.model_dump(), "transcript": transcript}
+    assert session_service._sessions[session_id].teach_back_content.state.completed_micro_skill_ids == (["T02.M1"] if verdict == "UNDERSTOOD" else [])
     assert upstream["engine_calls"] == 0
 
 
