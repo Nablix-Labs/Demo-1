@@ -6,6 +6,7 @@ import os
 from copy import deepcopy
 
 import pytest
+from anyio import fail_after
 from fastapi.testclient import TestClient
 from openai import AsyncOpenAI
 from websockets.legacy.client import connect
@@ -663,7 +664,7 @@ def test_live_realtime_teach_back_tool(upstream: dict[str, object], monkeypatch:
                            extra_headers={"Authorization": f"Bearer {secret}"}, open_timeout=20) as connection:
             await connection.send(json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(audio.content).decode("ascii")}))
             await connection.send(json.dumps({"type": "input_audio_buffer.commit"}))
-            async with asyncio.timeout(started.json()["response_timeout_seconds"]):
+            with fail_after(started.json()["response_timeout_seconds"]):
                 async for raw in connection:
                     event = json.loads(raw)
                     if event["type"] == "error":
@@ -679,7 +680,7 @@ def test_live_realtime_teach_back_tool(upstream: dict[str, object], monkeypatch:
             for attempt in range(started.json()["request_retry_count"] + 1):
                 arguments: dict[str, object] | None = None
                 await connection.send(json.dumps(live_reply_request(context, transcript, validation_error)))
-                async with asyncio.timeout(started.json()["response_timeout_seconds"]):
+                with fail_after(started.json()["response_timeout_seconds"]):
                     async for raw in connection:
                         event = json.loads(raw)
                         if event["type"] == "error":
@@ -769,7 +770,7 @@ def test_live_realtime_curious_student_conversation(upstream: dict[str, object],
                 confidence: float | None = None
                 await connection.send(json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(audio).decode("ascii")}))
                 await connection.send(json.dumps({"type": "input_audio_buffer.commit"}))
-                async with asyncio.timeout(started.json()["response_timeout_seconds"]):
+                with fail_after(started.json()["response_timeout_seconds"]):
                     async for raw in connection:
                         event = json.loads(raw)
                         if event["type"] == "error":
@@ -785,7 +786,7 @@ def test_live_realtime_curious_student_conversation(upstream: dict[str, object],
                 for attempt in range(started.json()["request_retry_count"] + 1):
                     arguments: dict[str, object] | None = None
                     await connection.send(json.dumps(live_reply_request(context, transcript, validation_error)))
-                    async with asyncio.timeout(started.json()["response_timeout_seconds"]):
+                    with fail_after(started.json()["response_timeout_seconds"]):
                         async for raw in connection:
                             event = json.loads(raw)
                             if event["type"] == "error":
