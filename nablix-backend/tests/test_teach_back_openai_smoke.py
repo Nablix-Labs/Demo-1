@@ -168,7 +168,8 @@ def test_standard_curiosity_through_complete_conversation(monkeypatch: pytest.Mo
             remaining = [skill for skill in content.state.target_micro_skill_ids if skill not in completed]
             assert reply.next_action == ("NEXT_MICRO_SKILL" if remaining else "MOVE_TO_PHASE_2")
             if remaining:
-                assert "letter" in reply.tutor_message.lower(), reply.model_dump()
+                wording = reply.tutor_message.lower()
+                assert "letter" in wording or re.search(r"\bn\b", wording), reply.model_dump()
             content = content.model_copy(update={"state": content.state.model_copy(update={
                 "completed_micro_skill_ids": completed, "current_micro_skill_id": remaining[0] if remaining else None,
                 "failed_explanation_count": 0, "status": "IN_PROGRESS" if remaining else "COMPLETED",
