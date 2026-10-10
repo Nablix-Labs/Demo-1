@@ -10,21 +10,22 @@
  * understood) moves on. The global phase router does the navigation once the
  * reply has been spoken. No canvas, score, attempt counter or hint ladder.
  *
+ * Live voice only changes the ears and the mouth: Realtime hears the student
+ * and says the approved reply, while every turn is graded by the same
+ * /interaction call as Standard mode.
+ *
  * Request rules and failure handling live in lib/teachback/connected.ts.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import axios from 'axios';
 import { ArrowRight, Check, GraduationCap, Mic, RotateCw, Send, Square } from 'lucide-react';
-import {
-  api, getSession, studentId, type InteractionPayload, type InteractionResponse, type StaleTurnResponse,
-} from '@/lib/api';
+import { api, getSession, studentId, type InteractionPayload, type InteractionResponse } from '@/lib/api';
 import { acceptResponse } from '@/lib/interactionPresentation';
 import { adoptSessionRecord, sendSynchronizedInteraction, syncBackendSession } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
 import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
 import { tutorSay } from '@/lib/tutorSpeech';
 import { stopTutorSpeech } from '@/lib/tts';
-import { TeachBackVoiceConnection, type RealtimeTurn } from '@/lib/teachback/realtimeVoice';
+import { TeachBackVoiceConnection } from '@/lib/teachback/realtimeVoice';
 import {
   restoredLines, teachBackFailure, teachBackFailureMessage, teachBackPayload,
   type TeachBackLine, type TeachBackSource,
@@ -59,6 +60,8 @@ export default function ConnectedTeachBackClient() {
   const [speaking, setSpeaking] = useState(false);
   const [listening, setListening] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [micPaused, setMicPaused] = useState(false);
+  const [heard, setHeard] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [pending, setPending] = useState<PendingTurn | null>(null);
@@ -69,6 +72,7 @@ export default function ConnectedTeachBackClient() {
   const conceptId = useRef<string>('');
   const mounted = useRef(true);
   const endRef = useRef<HTMLDivElement>(null);
+  const onHeardTurn = useRef<(text: string, confidence: number | null) => void>(() => {});
 
   useEffect(() => {
     mounted.current = true;
@@ -80,7 +84,7 @@ export default function ConnectedTeachBackClient() {
     };
   }, []);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }); }, [lines, busy]);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }); }, [lines, busy, heard]);
 
   /** GET the session: runs the backend's pending recovery and re-adopts its phase and history. */
   const refresh = useCallback(async () => {
@@ -142,7 +146,9 @@ export default function ConnectedTeachBackClient() {
       if (mounted.current) setSpeaking(false);
       onEnd?.();
     };
-    tutorSay(voice, { onEnd: finish });
+    const live = connection.current;
+    if (live) void live.speak(voice).then(finish);
+    else tutorSay(voice, { onEnd: finish });
     // Audio can be blocked or never report its end; never leave the input locked.
     window.setTimeout(finish, HANDOFF_FALLBACK_MS);
   }, []);
@@ -172,13 +178,13 @@ export default function ConnectedTeachBackClient() {
     // Leaving Teach-Back. Hold the route until Numera has finished speaking,
     // but take its turn id now so nothing sent meanwhile is stale.
     store.setTutorTurn(response.tutor_turn_id ?? store.lastTutorTurnId, { expects: false, allow: false });
-    connection.current?.close();
-    connection.current = null;
-    if (mounted.current) {
-      setConnected(false);
-      if (response.current_phase === 'GUIDED_PRACTICE') setDone(true);
-    }
-    speak(voice, () => syncBackendSession(response));
+    if (mounted.current && response.current_phase === 'GUIDED_PRACTICE') setDone(true);
+    speak(voice, () => {
+      connection.current?.close(false);
+      connection.current = null;
+      if (mounted.current) setConnected(false);
+      syncBackendSession(response);
+    });
   }, [speak]);
 
   /** Send a student turn; on failure refresh first, then keep or drop it. */
@@ -204,11 +210,6 @@ export default function ConnectedTeachBackClient() {
         setPending(null);
       }
       if (!savedAnyway) setError(teachBackFailureMessage(action));
-      if (action !== 'retry') {
-        connection.current?.close();
-        connection.current = null;
-        setConnected(false);
-      }
     }
   }, [present, refresh]);
 
@@ -254,53 +255,7 @@ export default function ConnectedTeachBackClient() {
     },
   });
 
-  // Realtime voice: the browser talks to the model; the backend records the turn.
-  const postRealtime = async (body: Record<string, unknown> & { interaction: InteractionPayload }): Promise<InteractionResponse> => {
-    try {
-      return (await api.post<InteractionResponse>('/voice/teach-back/result', body, { timeout: 90_000 })).data;
-    } catch (cause) {
-      const data = axios.isAxiosError(cause) ? cause.response?.data as StaleTurnResponse | undefined : undefined;
-      if (data?.status !== 'STALE_TURN') throw cause;
-      // Not evaluated: resend the same turn once against the tutor turn the backend expects.
-      return (await api.post<InteractionResponse>('/voice/teach-back/result', {
-        ...body,
-        interaction: { ...body.interaction, previous_tutor_turn_id: data.expected_previous_tutor_turn_id },
-      }, { timeout: 90_000 })).data;
-    }
-  };
-
-  const recordRealtime = async (turn: RealtimeTurn, source: TeachBackSource) => {
-    const active = connection.current;
-    if (!active) throw new Error('The voice connection closed.');
-    const context = active.lessonContext;
-    const body = {
-      interaction: payloadFor(turn.transcript, source, turn.transcriptConfidence),
-      teach_back_id: context.teach_back_id,
-      micro_skill_id: context.micro_skill_id,
-      reply: turn.reply,
-    };
-    setLines((prev) => [...prev, { role: 'student', text: turn.transcript }]);
-    useNumeraStore.getState().addTranscriptMessage({ role: 'student', text: turn.transcript });
-    await runTurn(turn.transcript, async () => {
-      let proposal = turn;
-      for (let attempt = 0; attempt <= active.replyRetryCount; attempt += 1) {
-        try {
-          return await postRealtime({ ...body, reply: proposal.reply });
-        } catch (cause: unknown) {
-          const rejection = axios.isAxiosError(cause) ? cause.response?.data as { error_code?: string; message?: string } | undefined : undefined;
-          if (rejection?.error_code !== 'INVALID_TEACH_BACK_REPLY' || typeof rejection.message !== 'string' || attempt === active.replyRetryCount) throw cause;
-          console.warn('teach_back_reply_retry', { attempt: attempt + 1, turn_id: body.interaction.turn_id, validation_error: rejection.message });
-          await active.refreshContext(body.interaction.session_id, studentId());
-          proposal = await active.retryReply(proposal, rejection.message);
-        }
-      }
-      throw new Error('Teach-back reply exhausted its configured validation retries.');
-    });
-    const id = useNumeraStore.getState().sessionId;
-    if (connection.current && useNumeraStore.getState().currentPhase === 'TEACH_BACK' && id) {
-      await connection.current.refreshContext(id, studentId());
-    }
-  };
+  onHeardTurn.current = (transcript, confidence) => { void submitStandard(transcript, 'VOICE', confidence); };
 
   const guarded = async (work: () => Promise<void>) => {
     if (inFlight.current) return;
@@ -309,50 +264,53 @@ export default function ConnectedTeachBackClient() {
     setError(null);
     try { await work(); } catch (cause) {
       setError(teachBackFailureMessage(teachBackFailure(cause)));
-      connection.current?.close();
-      connection.current = null;
-      setConnected(false);
-      setListening(false);
     } finally {
       inFlight.current = false;
       if (mounted.current) setBusy(false);
     }
   };
 
-  const connectVoice = () => guarded(async () => {
+  const connectVoice = async () => {
     const id = useNumeraStore.getState().sessionId;
-    if (!id) return;
-    const active = await TeachBackVoiceConnection.connect(id, studentId());
-    if (!mounted.current || useNumeraStore.getState().sessionId !== id) { active.close(); return; }
-    connection.current = active;
-    setConnected(true);
-  });
+    if (!id || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const live = await TeachBackVoiceConnection.connect(id, studentId(), {
+        onHeard: (text) => { if (mounted.current) setHeard(text); },
+        onTranscript: (text, confidence) => onHeardTurn.current(text, confidence),
+        onClosed: () => {
+          connection.current = null;
+          if (!mounted.current) return;
+          setConnected(false);
+          setHeard('');
+          setError('Live voice disconnected. Press Start live voice to carry on, or switch to Standard.');
+        },
+      });
+      if (!mounted.current || useNumeraStore.getState().sessionId !== id) { live.close(false); return; }
+      connection.current = live;
+      setMicPaused(false);
+      setConnected(true);
+    } catch (cause) {
+      console.warn('teach_back_voice_connect_failed', cause);
+      setError('Live voice could not start. Check that the microphone is allowed, or switch to Standard.');
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  };
 
-  const toggleMic = async () => {
+  const toggleMic = () => {
     if (mode === 'standard') {
       if (voice.active) voice.finish();
       else { stopTutorSpeech(); voice.start(); setListening(true); }
       return;
     }
-    const active = connection.current;
-    if (!active || inFlight.current) return;
-    if (!listening) {
-      try { stopTutorSpeech(); active.startListening(); setListening(true); } catch (cause) {
-        setError(teachBackFailureMessage(teachBackFailure(cause)));
-      }
-      return;
-    }
-    setListening(false);
-    await guarded(async () => recordRealtime(await active.finishListening(), 'VOICE'));
+    if (speaking) { connection.current?.stopSpeaking(); return; }
+    setMicPaused((paused) => !paused);
   };
 
   const submitText = async () => {
-    if (mode === 'standard') { await submitStandard(text, 'TEXT'); return; }
-    const active = connection.current;
-    if (!active || !text.trim()) return;
-    const value = text;
-    setText('');
-    await guarded(async () => recordRealtime(await active.submitText(value), 'TEXT'));
+    await submitStandard(text, 'TEXT');
   };
 
   const retry = () => guarded(async () => {
@@ -371,10 +329,23 @@ export default function ConnectedTeachBackClient() {
   const active = phase === 'TEACH_BACK' && !done;
   const locked = !active || busy || speaking || pending !== null || !started;
   const needsConnect = mode === 'realtime' && !connected;
+  // Live voice: the mic is open exactly when it is the student's turn.
+  const liveListening = mode === 'realtime' && connected && !locked && !micPaused;
+
+  useEffect(() => {
+    const live = connection.current;
+    if (!live) return;
+    if (liveListening) live.listen();
+    else live.pause();
+  }, [liveListening, connected]);
   const lastTutor = [...lines].reverse().find((l) => l.role === 'tutor');
-  const status = busy ? 'Numera is thinking…' : speaking ? 'Numera is talking…' : listening
-    ? (mode === 'realtime' ? 'Listening. Press stop when you have finished.' : 'Listening… stop talking when you are done.')
+  const status = busy ? 'Numera is thinking…' : speaking
+    ? (mode === 'realtime' ? 'Numera is talking… press the mic to cut in.' : 'Numera is talking…')
+    : liveListening ? 'Listening. Just talk, Numera will know when you have finished.'
+    : mode === 'realtime' && connected && micPaused ? 'Mic paused. Press the mic to talk.'
+    : listening ? 'Listening… stop talking when you are done.'
     : 'Take your time. Speak or type your explanation.';
+  const micOn = mode === 'realtime' ? liveListening : listening;
 
   return (
     <main className="relative flex flex-1 flex-col overflow-hidden bg-[#FFF8EE]" aria-label="Teach-Back">
@@ -391,7 +362,7 @@ export default function ConnectedTeachBackClient() {
                 key={m}
                 disabled={busy || speaking || listening || pending !== null}
                 aria-pressed={mode === m}
-                onClick={() => { voice.stop(); connection.current?.close(); connection.current = null; setConnected(false); setMode(m); setError(null); }}
+                onClick={() => { voice.stop(); connection.current?.close(false); connection.current = null; setConnected(false); setHeard(''); setMode(m); setError(null); }}
                 className={cn('rounded-full px-3 py-1.5 transition-colors', mode === m ? 'bg-white text-focus-navy shadow-sm' : 'text-[#9A7B45]')}
               >
                 {m === 'standard' ? 'Standard' : 'Live voice'}
@@ -418,6 +389,11 @@ export default function ConnectedTeachBackClient() {
               </p>
             </div>
           ))}
+          {heard && (
+            <div className="flex justify-end">
+              <p className="max-w-[80%] rounded-2xl rounded-br-md bg-focus-navy/60 px-4 py-3 text-[14.5px] leading-relaxed text-white">{heard}</p>
+            </div>
+          )}
           {busy && started && (
             <div className="flex items-end gap-2.5">
               <PupilMark size={28} bob />
@@ -458,21 +434,25 @@ export default function ConnectedTeachBackClient() {
             <form onSubmit={(e) => { e.preventDefault(); void submitText(); }} className="flex items-center gap-2 rounded-full border border-[#EAD6B2] bg-white p-1.5 pl-2">
               <button
                 type="button"
-                onClick={() => void toggleMic()}
-                disabled={(locked && !listening) || (mode === 'standard' && !voice.supported)}
-                aria-label={listening ? 'Stop and send' : 'Speak your explanation'}
+                onClick={toggleMic}
+                disabled={mode === 'realtime'
+                  ? !active || busy || pending !== null || !started
+                  : (locked && !listening) || !voice.supported}
+                aria-label={mode === 'realtime'
+                  ? (speaking ? 'Stop Numera talking' : micPaused ? 'Turn the mic on' : 'Pause the mic')
+                  : listening ? 'Stop and send' : 'Speak your explanation'}
                 className={cn(
                   'flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full transition disabled:opacity-40',
-                  listening ? 'bg-action-orange text-white' : 'bg-[#FFF1DC] text-action-orange',
+                  micOn ? 'bg-action-orange text-white' : 'bg-[#FFF1DC] text-action-orange',
                 )}
               >
-                {listening ? <Square size={14} fill="currentColor" /> : <Mic size={17} />}
+                {micOn && mode === 'standard' ? <Square size={14} fill="currentColor" /> : micOn ? <Mic size={17} className="animate-pulse" /> : <Mic size={17} />}
               </button>
               <input
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 maxLength={500}
-                disabled={locked || listening}
+                disabled={locked || listening || Boolean(heard)}
                 placeholder="Explain the idea in your own words…"
                 aria-label="Your explanation"
                 className="min-w-0 flex-1 bg-transparent px-2 text-[14.5px] text-ink outline-none placeholder:text-[#B9A27A]"

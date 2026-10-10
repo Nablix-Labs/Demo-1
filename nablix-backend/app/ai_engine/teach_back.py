@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 import re
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -20,16 +21,18 @@ class TeachBackRealtimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool
-    model: str
-    transcription_model: str
+    model: str = Field(min_length=1)
+    voice: str = Field(min_length=1)
+    transcription_model: str = Field(min_length=1)
+    transcription_language: str = Field(min_length=2)
+    transcription_prompt: str
+    noise_reduction: Literal["near_field", "far_field"] | None
+    turn_detection: dict[str, str]
     client_secret_url: str
     calls_url: str
     token_lifetime_seconds: int = Field(ge=10, le=600)
     response_timeout_seconds: int = Field(ge=5, le=120)
-    tool_name: str
-    tool_description: str
-    student_evidence_description: str
-    transport_instructions: str
+    speaker_instructions: str = Field(min_length=1)
 
 
 class TeachBackConfig(BaseModel):
@@ -43,10 +46,12 @@ class TeachBackConfig(BaseModel):
     acknowledgement_message: str
     completion_message: str
     invalid_response_message: str
-    invalid_student_evidence_message: str
     forbidden_student_text_patterns: list[str]
     non_explanation_patterns: list[str]
     backend_model: str = Field(min_length=1)
+    reasoning_effort: str | None
+    grader_history_messages: int = Field(ge=0)
+    spoken_maths_words: dict[str, str]
     curious_student_pattern: str
     grading_phrases: list[str]
     clear_question_pattern: str
@@ -58,6 +63,17 @@ class TeachBackConfig(BaseModel):
 def load_teach_back_config() -> TeachBackConfig:
     path = Path(__file__).resolve().parents[2] / "configs" / "teach_back_tutor.yaml"
     return TeachBackConfig.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
+
+
+def quotes_student_words(claim: str | None, student_input: str) -> bool:
+    """Whether the claim repeats the student's own words, ignoring case, punctuation and '+' versus 'plus'."""
+    def plain(text: str) -> str:
+        for symbol, word in load_teach_back_config().spoken_maths_words.items():
+            text = text.replace(symbol, f" {word} ")
+        return " ".join(re.findall(r"[^\W_]+", text.casefold()))
+
+    quoted = plain(claim or "")
+    return bool(quoted) and f" {quoted} " in f" {plain(student_input)} "
 
 
 def teach_back_action(content: TeachBackPayload, verdict: str | None) -> TeachBackAction:
@@ -174,7 +190,9 @@ def validate_teach_back_wording(reply: TeachBackReply, student_input: str) -> No
                 raise ValueError("Answer this clear conceptual question first with a declarative sentence based on the supplied concept or worked example, using I or me. Then ask at most one curious-student follow-up. Do not ask the student to answer their own question.")
 
 
-def evaluate_teach_back_answer(content: TeachBackPayload, student_input: str) -> TeachBackEvaluation:
+def evaluate_teach_back_answer(
+    content: TeachBackPayload, student_input: str, history: list[ConversationMessage],
+) -> TeachBackEvaluation:
     """Assess only the current conceptual claim, without generating tutor wording."""
     validate_teach_back_content(content)
     config = load_teach_back_config()
@@ -192,18 +210,18 @@ def evaluate_teach_back_answer(content: TeachBackPayload, student_input: str) ->
         "last_tutor_question": last.tutor_response if last is not None else None,
         "completed_concepts": [target.expected_concept for target in content.targets
                                if target.micro_skill_id in content.state.completed_micro_skill_ids],
+        "recent_history": [message.model_dump() for message in history[-config.grader_history_messages:]]
+                          if config.grader_history_messages else [],
     }
     for attempt in range(settings.adapter_request_retry_count + 1):
-        raw = client.evaluate_teach_back(context, schema, config.evaluation_instructions)
+        raw = client.evaluate_teach_back(context, schema, config.evaluation_instructions, config.reasoning_effort)
         try:
             checked = TeachBackEvidenceEvaluation.model_validate(raw)
-            claim = checked.student_claim.strip().strip('"“”') if checked.student_claim is not None else ""
-            if checked.evaluation.understanding_status is not None and (not claim or claim.casefold() not in student_input.casefold()):
-                raise ValueError("A graded current-target assessment must quote this student's actual claim.")
-            if checked.evaluation.understanding_status is None and checked.student_claim is not None:
-                raise ValueError("Discussion has no graded current-target student claim.")
             if checked.evaluation.error_code is not None and checked.evaluation.error_code not in codes:
                 raise ValueError("The verifier returned an unknown current-target misconception code.")
+            # A quoted claim on an ungraded turn changes nothing, so it is not worth another model call.
+            if checked.evaluation.understanding_status is not None and not quotes_student_words(checked.student_claim, student_input):
+                raise ValueError("A graded current-target assessment must quote this student's actual claim.")
             return checked.evaluation
         except (ValidationError, ValueError) as error:
             logger.warning("teach_back_evaluation_retry", extra={"attempt": attempt + 1, "validation_error": str(error), "response": raw})
@@ -251,12 +269,13 @@ def generate_teach_back_reply(
     client = build_openai_ai_engine_client(settings.model_copy(update={"openai_ai_engine_model": load_teach_back_config().backend_model}))
     if client is None:
         raise AdapterError("teach_back", "Teach-Back requires the configured AI engine and an API key.")
-    verified = evaluate_teach_back_answer(content, student_input)
+    verified = evaluate_teach_back_answer(content, student_input, history)
     context = build_teach_back_context(content, student_input, input_source, transcript_confidence)
     context["verified_evaluation"] = verified.model_dump()
     for attempt in range(settings.adapter_request_retry_count + 1):
         raw_reply = client.generate_teach_back(
-            context, TeachBackReply.model_json_schema(), history[-rules.conversation_rules.max_recent_messages:] if rules.conversation_rules.max_recent_messages else []
+            context, TeachBackReply.model_json_schema(), history[-rules.conversation_rules.max_recent_messages:] if rules.conversation_rules.max_recent_messages else [],
+            load_teach_back_config().reasoning_effort,
         )
         try:
             reply = TeachBackReply.model_validate(raw_reply)

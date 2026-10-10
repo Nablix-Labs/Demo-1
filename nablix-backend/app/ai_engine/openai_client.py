@@ -1121,13 +1121,17 @@ class OpenAIAIEngineClient:
                 f"invalid Explain Again response: {error}",
             ) from error
 
-    def evaluate_teach_back(self, context: dict[str, object], schema: dict[str, object], instructions: str) -> dict[str, object]:
+    def evaluate_teach_back(
+        self, context: dict[str, object], schema: dict[str, object], instructions: str, reasoning_effort: str | None,
+    ) -> dict[str, object]:
         request_body: dict[str, object] = {
             "model": self._model, "store": self._store_responses,
             "input": [{"role": "system", "content": instructions},
                       {"role": "user", "content": json.dumps(context, ensure_ascii=False)}],
             "text": {"format": {"type": "json_schema", "name": "teach_back_evidence", "schema": openai_strict_schema(schema), "strict": True}},
         }
+        if reasoning_effort is not None:
+            request_body["reasoning"] = {"effort": reasoning_effort}
         response, latency_ms = self._post_with_retries(request_body)
         if response.status_code != 200:
             raise AdapterError("openai_ai_engine", f"status={response.status_code} body={response.text}")
@@ -1149,6 +1153,7 @@ class OpenAIAIEngineClient:
         context: dict[str, object],
         schema: dict[str, object],
         history: list[ConversationMessage],
+        reasoning_effort: str | None,
     ) -> dict[str, object]:
         response_schema = deepcopy(schema)
         required_actions = context["required_actions"]
@@ -1170,6 +1175,7 @@ class OpenAIAIEngineClient:
             name="teach_back_conversation", schema=response_schema, phase="TEACH_BACK",
             active_triggers=[], conversation_history=[],
             user_payload={**context, "recent_history": [message.model_dump() for message in history]},
+            reasoning_effort=reasoning_effort,
         )
 
     def generate_phase4_review(
@@ -1194,6 +1200,7 @@ class OpenAIAIEngineClient:
         active_triggers: Collection[Trigger | str],
         conversation_history: list[ConversationMessage],
         user_payload: dict[str, object],
+        reasoning_effort: str | None = None,
     ) -> dict[str, object]:
         request_payload = {"component": name, **user_payload}
         prompt_metadata = build_openai_tutor_prompt_metadata(
@@ -1232,6 +1239,8 @@ class OpenAIAIEngineClient:
                 }
             },
         }
+        if reasoning_effort is not None:
+            request_body["reasoning"] = {"effort": reasoning_effort}
         if self._prompt_cache_key_enabled:
             cache_state = ":".join(
                 [

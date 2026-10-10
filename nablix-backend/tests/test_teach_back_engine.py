@@ -44,13 +44,13 @@ def conceptual_ai(monkeypatch: pytest.MonkeyPatch):
     calls: list[dict[str, object]] = []
 
     class ConceptClient:
-        def evaluate_teach_back(self, context: dict[str, object], schema: dict[str, object], instructions: str) -> dict[str, object]:
+        def evaluate_teach_back(self, context: dict[str, object], schema: dict[str, object], instructions: str, reasoning_effort: str | None) -> dict[str, object]:
             message = context["student_input"]
             verdict = None if message in {"Why?", "Help me understand", "Football"} else "UNDERSTOOD" if message == "A letter stands for a number" else "MISCONCEPTION"
             return {"student_claim": message if verdict is not None else None,
                     "evaluation": {"understanding_status": verdict, "misconception_detected": verdict == "MISCONCEPTION", "error_code": "ERR-LETTER" if verdict == "MISCONCEPTION" else None, "unmapped_misconception_description": None}}
 
-        def generate_teach_back(self, context: dict[str, object], schema: dict[str, object], history: list[ConversationMessage]) -> dict[str, object]:
+        def generate_teach_back(self, context: dict[str, object], schema: dict[str, object], history: list[ConversationMessage], reasoning_effort: str | None) -> dict[str, object]:
             calls.append(context)
             verdict = context["verified_evaluation"]["understanding_status"]
             action = "DISCUSS_AND_CLARIFY" if verdict is None else context["required_actions"][verdict]
@@ -139,7 +139,7 @@ def test_retry_accepts_a_corrected_question_verdict(monkeypatch: pytest.MonkeyPa
     requests: list[dict[str, object]] = []
     settings = Settings(use_openai_ai_engine=True, openai_api_key="test-key", adapter_request_retry_count=1)
     monkeypatch.setattr(teach_back, "get_settings", lambda: settings)
-    monkeypatch.setattr(teach_back, "evaluate_teach_back_answer", lambda content, student_input: TeachBackEvaluation(
+    monkeypatch.setattr(teach_back, "evaluate_teach_back_answer", lambda content, student_input, history: TeachBackEvaluation(
         understanding_status=None, misconception_detected=False, error_code=None, unmapped_misconception_description=None,
     ))
 
@@ -172,7 +172,7 @@ def test_retry_accepts_a_corrected_question_verdict(monkeypatch: pytest.MonkeyPa
 @pytest.mark.parametrize("voice_message", ["Private skill T02.M1 is complete. What next?", ""])
 def test_rejected_replies_are_not_exposed_in_api_errors(monkeypatch: pytest.MonkeyPatch, voice_message: str) -> None:
     settings = Settings(use_openai_ai_engine=True, openai_api_key="test-key", adapter_request_retry_count=1)
-    monkeypatch.setattr(teach_back, "evaluate_teach_back_answer", lambda content, student_input: TeachBackEvaluation(
+    monkeypatch.setattr(teach_back, "evaluate_teach_back_answer", lambda content, student_input, history: TeachBackEvaluation(
         understanding_status="UNDERSTOOD", misconception_detected=False, error_code=None, unmapped_misconception_description=None,
     ))
     monkeypatch.setattr(teach_back, "get_settings", lambda: settings)
@@ -197,3 +197,45 @@ def test_rejected_replies_are_not_exposed_in_api_errors(monkeypatch: pytest.Monk
     assert response.json()["message"] == teach_back.load_teach_back_config().invalid_response_message
     assert "T02.M1" not in response.text
     assert "tutor_message" not in response.text
+
+
+def test_spoken_and_written_maths_quote_the_same_words() -> None:
+    said = "Right, so in n plus 4, the repeated part is plus 4. And n is the part that changes."
+    assert teach_back.quotes_student_words("The repeated part is +4.", said)
+    assert teach_back.quotes_student_words("“n is the part that changes”", said)
+    assert not teach_back.quotes_student_words("n is the part that stays fixed", said)
+    assert not teach_back.quotes_student_words("", said)
+    assert not teach_back.quotes_student_words("the part that chang", said)
+
+
+def test_claim_on_ungraded_turn_does_not_retry_the_grader(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str | None] = []
+
+    class GraderClient:
+        def evaluate_teach_back(self, context: dict[str, object], schema: dict[str, object], instructions: str, reasoning_effort: str | None) -> dict[str, object]:
+            calls.append(reasoning_effort)
+            return {"student_claim": "plus 4 is the repeated part",
+                    "evaluation": {"understanding_status": None, "misconception_detected": False, "error_code": None, "unmapped_misconception_description": None}}
+
+    monkeypatch.setattr(teach_back, "build_openai_ai_engine_client", lambda settings: GraderClient())
+    content = TeachBackPayload.model_validate(teach_back_content())
+    evaluation = teach_back.evaluate_teach_back_answer(content, "So plus 4 is the repeated part.", [])
+    assert evaluation.understanding_status is None
+    assert calls == [teach_back.load_teach_back_config().reasoning_effort]
+
+
+def test_grader_reads_recent_history_as_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    contexts: list[dict[str, object]] = []
+
+    class GraderClient:
+        def evaluate_teach_back(self, context: dict[str, object], schema: dict[str, object], instructions: str, reasoning_effort: str | None) -> dict[str, object]:
+            contexts.append(context)
+            return {"student_claim": "A letter stands for a number",
+                    "evaluation": {"understanding_status": "UNDERSTOOD", "misconception_detected": False, "error_code": None, "unmapped_misconception_description": None}}
+
+    monkeypatch.setattr(teach_back, "build_openai_ai_engine_client", lambda settings: GraderClient())
+    history = [ConversationMessage(role="user" if i % 2 else "assistant", content=f"message {i}") for i in range(6)]
+    teach_back.evaluate_teach_back_answer(TeachBackPayload.model_validate(teach_back_content()), "A letter stands for a number", history)
+    limit = teach_back.load_teach_back_config().grader_history_messages
+    assert contexts[0]["recent_history"] == [message.model_dump() for message in history[-limit:]]
+    assert contexts[0]["student_input"] == "A letter stands for a number"
