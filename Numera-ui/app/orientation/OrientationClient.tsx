@@ -37,7 +37,7 @@ import {
   type OrientationMedia,
 } from '@/lib/demoContent';
 import { useNumeraStore } from '@/store/useNumeraStore';
-import { beginSession, resumeSession, sessionStartError } from '@/hooks/useDemoTutor';
+import { adoptSessionRecord, beginSession, resumeSession, sessionStartError } from '@/hooks/useDemoTutor';
 import { useAuthStore } from '@/store/useAuthStore';
 import {
   completeOrientation,
@@ -684,12 +684,17 @@ function BackendOrientation({ topicId }: { topicId: string }) {
       // started ALG_LINEAR_ONE_STEP instead — the wrong topic, and for a
       // student who has finished it, a 42s review-blocked start that timed
       // out (ST015, 21 Sep). Same fix as the diagnostic (#353).
-      const active = currentSessionId ?? (await beginSession(activeConceptId, 'TEXT', topicId))?.session_id;
+      const opened = currentSessionId ? null : await beginSession(activeConceptId, 'TEXT', topicId);
+      const active = currentSessionId ?? opened?.session_id;
       if (!active) {
         setError(sessionStartError() ?? "Couldn't reach the tutor to load this topic.");
         setStatus('error');
         return;
       }
+      // A fresh session can resume straight into Teach-Back (TEACH_BACK_RESUMED);
+      // starting orientation then only 409s (VM log 10 Oct, 12:58).
+      // Adopting the record hands the phase to the router, which opens /teach.
+      if (opened?.current_phase === 'TEACH_BACK') { adoptSessionRecord(opened); return; }
       const rec = await startOrientation(active, studentId());
       setBackendSession(rec);
       setStatus(orientationSequence(rec).length > 0 ? 'ready' : 'empty');
