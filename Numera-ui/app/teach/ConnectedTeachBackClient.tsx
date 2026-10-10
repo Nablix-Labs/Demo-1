@@ -17,11 +17,12 @@
  * Request rules and failure handling live in lib/teachback/connected.ts.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowRight, Check, GraduationCap, Mic, RotateCw, Send, Square } from 'lucide-react';
+import { ArrowRight, Check, GraduationCap, Mic, MicOff, RotateCw, Send } from 'lucide-react';
 import { api, getSession, studentId, type InteractionPayload, type InteractionResponse } from '@/lib/api';
 import { acceptResponse } from '@/lib/interactionPresentation';
 import { adoptSessionRecord, sendSynchronizedInteraction, syncBackendSession } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
+import { useMicLevel } from '@/store/useMicLevel';
 import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
 import { tutorSay } from '@/lib/tutorSpeech';
 import { stopTutorSpeech } from '@/lib/tts';
@@ -58,8 +59,8 @@ export default function ConnectedTeachBackClient() {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [speaking, setSpeaking] = useState(false);
-  const [listening, setListening] = useState(false);
   const [connected, setConnected] = useState(false);
+  // Both modes work like the lesson mic: hands-free while on, and a tap pauses it without sending.
   const [micPaused, setMicPaused] = useState(false);
   const [heard, setHeard] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -247,13 +248,24 @@ export default function ConnectedTeachBackClient() {
     }
   };
 
+  // Standard: the student went quiet, so send what they said after anything they paused into the box.
   const voice = useVoiceTurn({
     onTurnEnd: (transcript, confidence) => {
-      voice.stop();
-      setListening(false);
-      if (transcript) void submitStandard(transcript, 'VOICE', confidence);
+      setHeard('');
+      const full = [text.trim(), transcript.trim()].filter(Boolean).join(' ');
+      if (full) void submitStandard(full, 'VOICE', confidence);
     },
+    onInterim: setHeard,
   });
+  const listening = mode === 'standard' && voice.active;
+
+  /** Standard: pause without sending; the words heard so far move into the box to edit, send or add to. */
+  const pauseStandard = (typed?: string) => {
+    const words = (useMicLevel.getState().caption || heard).trim();
+    setText((t) => [(typed ?? t).trim(), words].filter(Boolean).join(' '));
+    setHeard('');
+    setMicPaused(true);
+  };
 
   onHeardTurn.current = (transcript, confidence) => { void submitStandard(transcript, 'VOICE', confidence); };
 
@@ -301,8 +313,8 @@ export default function ConnectedTeachBackClient() {
 
   const toggleMic = () => {
     if (mode === 'standard') {
-      if (voice.active) voice.finish();
-      else { stopTutorSpeech(); voice.start(); setListening(true); }
+      if (micPaused) setMicPaused(false); // listens once Numera has finished talking
+      else pauseStandard();
       return;
     }
     if (speaking) { connection.current?.stopSpeaking(); return; }
@@ -338,12 +350,20 @@ export default function ConnectedTeachBackClient() {
     if (liveListening) live.listen();
     else live.pause();
   }, [liveListening, connected]);
+  // Standard is half-duplex like the lesson: the mic listens only while the floor is the student's.
+  const standardListening = mode === 'standard' && !micPaused && voice.supported && !locked;
+  const { start: startVoice, stop: stopVoice } = voice;
+  useEffect(() => {
+    if (standardListening) void startVoice();
+    else if (mode === 'standard') { stopVoice(); setHeard(''); }
+  }, [standardListening, mode, startVoice, stopVoice]);
   const lastTutor = [...lines].reverse().find((l) => l.role === 'tutor');
   const status = busy ? 'Numera is thinking…' : speaking
     ? (mode === 'realtime' ? 'Numera is talking… press the mic to cut in.' : 'Numera is talking…')
     : liveListening ? 'Listening. Just talk, Numera will know when you have finished.'
     : mode === 'realtime' && connected && micPaused ? 'Mic paused. Press the mic to talk.'
-    : listening ? 'Listening… stop talking when you are done.'
+    : listening ? 'Listening. Numera hears you when you stop talking. Tap the mic to pause.'
+    : mode === 'standard' && micPaused && voice.supported ? 'Mic paused. Tap the mic to talk, or type your explanation.'
     : 'Take your time. Speak or type your explanation.';
   const micOn = mode === 'realtime' ? liveListening : listening;
 
@@ -437,29 +457,33 @@ export default function ConnectedTeachBackClient() {
                 onClick={toggleMic}
                 disabled={mode === 'realtime'
                   ? !active || busy || pending !== null || !started
-                  : (locked && !listening) || !voice.supported}
-                aria-label={mode === 'realtime'
-                  ? (speaking ? 'Stop Numera talking' : micPaused ? 'Turn the mic on' : 'Pause the mic')
-                  : listening ? 'Stop and send' : 'Speak your explanation'}
+                  : !active || !started || !voice.supported}
+                aria-label={mode === 'realtime' && speaking ? 'Stop Numera talking' : micPaused ? 'Turn the mic on' : 'Pause the mic'}
+                aria-pressed={!micPaused}
+                title={mode === 'standard' && !micPaused && locked ? 'The mic listens when Numera has finished' : undefined}
                 className={cn(
                   'flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full transition disabled:opacity-40',
-                  micOn ? 'bg-action-orange text-white' : 'bg-[#FFF1DC] text-action-orange',
+                  micOn ? 'bg-action-orange text-white'
+                    : mode === 'standard' && micPaused ? 'bg-[#F3EBDD] text-[#9A7B45]'
+                    : mode === 'standard' ? 'bg-action-orange/50 text-white'
+                    : 'bg-[#FFF1DC] text-action-orange',
                 )}
               >
-                {micOn && mode === 'standard' ? <Square size={14} fill="currentColor" /> : micOn ? <Mic size={17} className="animate-pulse" /> : <Mic size={17} />}
+                {mode === 'standard' && micPaused ? <MicOff size={17} /> : micOn ? <Mic size={17} className="animate-pulse" /> : <Mic size={17} />}
               </button>
               <input
                 value={text}
-                onChange={(e) => setText(e.target.value)}
+                // Typing pauses the Standard mic, keeping what it heard.
+                onChange={(e) => (listening ? pauseStandard(e.target.value) : setText(e.target.value))}
                 maxLength={500}
-                disabled={locked || listening || Boolean(heard)}
+                disabled={locked || (mode === 'realtime' && Boolean(heard))}
                 placeholder="Explain the idea in your own words…"
                 aria-label="Your explanation"
                 className="min-w-0 flex-1 bg-transparent px-2 text-[14.5px] text-ink outline-none placeholder:text-[#B9A27A]"
               />
               <button
                 type="submit"
-                disabled={locked || listening || !text.trim()}
+                disabled={locked || !text.trim()}
                 aria-label="Send to Numera"
                 className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-highlight-amber text-white transition hover:brightness-105 disabled:opacity-40"
               >
