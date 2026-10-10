@@ -207,6 +207,11 @@ export default function ProfilePage() {
   const { signOut, signingOut, overlay } = useSignOut();
 
   const student = useAuthStore((s) => s.student);
+  // Login returns the student's name (studentName) but the editable profile
+  // (`student.name`) is only filled by sign-up, so a returning student who
+  // logged in saw "Name not set" (master plan §5). The profile wins when set.
+  const loginName = useAuthStore((s) => s.studentName);
+  const name = student.name?.trim() || loginName?.trim() || '';
   const guardian = useAuthStore((s) => s.guardian);
   const email = useAuthStore((s) => s.email);
   const tier = useAuthStore((s) => s.tier);
@@ -224,7 +229,7 @@ export default function ProfilePage() {
   const setInputMode = useNumeraStore((s) => s.setInputMode);
 
   const initials =
-    (student.name || email || 'N')
+    (name || email || 'N')
       .split(/[\s@._]/)
       .filter(Boolean)
       .slice(0, 2)
@@ -263,7 +268,7 @@ export default function ProfilePage() {
      counts fields that exist, so it drops to 0% on a fresh account rather than
      showing a flattering number nobody earned. */
   const fields = [
-    student.name, student.avatar, student.gradeBand, student.ageBand,
+    name, student.avatar, student.gradeBand, student.ageBand,
     email, guardian.name, guardian.email, guardian.verified ? 'y' : '',
   ];
   const filled = fields.filter(Boolean).length;
@@ -271,7 +276,7 @@ export default function ProfilePage() {
 
   return (
     <PageShell
-      title={student.name ? `Welcome in, ${student.name.split(' ')[0]}` : 'Your profile'}
+      title={name ? `Welcome in, ${name.split(' ')[0]}` : 'Your profile'}
       subtitle="Your account, how you learn, and what you have agreed to."
       wide
     >
@@ -394,7 +399,7 @@ export default function ProfilePage() {
                 className="text-[17px] font-semibold leading-tight truncate"
                 style={{ color: student.avatar ? '#fff' : ON_GREEN }}
               >
-                {student.name || <span className="font-normal opacity-60">Name not set</span>}
+                {name || <span className="font-normal opacity-60">Name not set</span>}
               </div>
               <div
                 className="text-[11.5px] mt-0.5 truncate"

@@ -61,6 +61,7 @@ import { speakBrowser } from '@/lib/tts';
 import type { SupportRung } from '@/lib/supportLadder';
 import type { NudgeClaimResult } from '@/hooks/useInactivityNudge';
 import { reportFailure } from '@/lib/failureReport';
+import { sendWithOneResend } from '@/lib/transientFailure';
 import {
   canvasSubmissionView, canvasResponseIdentity, advancesSession,
   type SubmissionRole,
@@ -694,7 +695,8 @@ function synchronizeStaleTurn(response: StaleTurnResponse): void {
 export async function sendSynchronizedInteraction(
   payload: InteractionPayload,
 ): Promise<InteractionResponse> {
-  const first = await sendInteraction(payload);
+  // One quiet resend for a 5xx or a lost request, same payload (lib/transientFailure).
+  const first = await sendWithOneResend(() => sendInteraction(payload));
   if (!isStaleTurnResponse(first)) return first;
 
   synchronizeStaleTurn(first);
@@ -1804,18 +1806,32 @@ export function useDemoTutor() {
           tutorSay(withTransitionVoice(entering, res.message_voice), { onEnd: onReplyEnd });
           return res;
         }
-      // This path never applied support at all, so a cue or scaffold served in
-      // reply to a choice was silently dropped — and with the backend now
-      // referring to it out loud, the tutor would point at something that was
-      // never rendered.
-        const spoken = applyInteractionSupport(res);
-        const hint = presentAuthorisedHint(res, addTrailEntry);
+      // Presented exactly like a typed answer. Since Sanya's 5 Oct change
+      // (078ac3b) a Phase 2 choice is GRADED like ANSWER_SUBMISSION: it can
+      // complete the question, serve the next one, open a rescue or end the
+      // phase. This path used to be a slimmer copy from when a choice was only
+      // discussed, so a choice that finished the last guided question changed
+      // phase with no announcement, and a rescue turn still showed the hint
+      // the rescue had escalated past.
+      // Support goes BEFORE the words that refer to it (the tutor says "look at
+      // the cue on your screen").
+        const entering = phaseAnnouncement(res, previousPhase);
+        const spoken = withTransitionVoice(entering, applyInteractionSupport(res));
+        const rescueTurn = opensRescue(res);
+        if (entering) {
+          if (!rescueTurn) addTranscriptMessage({ role: 'ai', text: entering.text });
+          addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
+        }
+        const hint = rescueTurn ? null : presentAuthorisedHint(res, addTrailEntry);
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message, meta: 'option selected' });
-        tutorSay(withHint(hint, spoken), { onEnd: onReplyEnd });
+        const drew = Boolean(res.canvas_draw?.length);
+        if (drew) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw!);
+        tutorSay(withHint(hint, spoken), { afterMarks: drew, onEnd: onReplyEnd });
         return res;
       } catch (err) {
         reopenFloorAfterFailure();
+        if (recoverIfStaleSession(err)) return null;
         reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (option selected)');
         return null;
       } finally {

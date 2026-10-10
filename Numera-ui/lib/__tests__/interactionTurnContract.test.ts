@@ -272,4 +272,25 @@ describe('an arriving question that has anchors but no opening action', () => {
 
     expect(useNumeraStore.getState().questionAnchors.map((a) => a.text)).toEqual(['½']);
   });
+
+  it('resends the SAME turn once after a transient 503, so a flaky tutor error never reaches the student (master plan B1)', async () => {
+    const reply = { status: 'processed', message: 'Nearly. What is 5 + 3?', interaction_state_version: 2 };
+    const post = vi.spyOn(api, 'post')
+      .mockRejectedValueOnce({ isAxiosError: true, response: { status: 503, data: { error_code: 'ADAPTER_UNAVAILABLE', message: 'The tutor service hit an error.' } } })
+      .mockResolvedValueOnce({ data: reply });
+
+    const response = await sendSynchronizedInteraction(PAYLOAD);
+
+    expect(response).toEqual(reply);
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(post.mock.calls[0][1]).toEqual(post.mock.calls[1][1]); // same turn_id, same content
+  });
+
+  it('does not resend a refused answer', async () => {
+    const refused = { isAxiosError: true, response: { status: 422, data: { error_code: 'VALIDATION_ERROR', message: 'bad' } } };
+    const post = vi.spyOn(api, 'post').mockRejectedValue(refused);
+    post.mockClear(); // the spy carries the previous test's calls
+    await expect(sendSynchronizedInteraction(PAYLOAD)).rejects.toBe(refused);
+    expect(post).toHaveBeenCalledTimes(1);
+  });
 });

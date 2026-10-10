@@ -26,7 +26,7 @@ import { tutorSay } from '@/lib/tutorSpeech';
 import { stopTutorSpeech } from '@/lib/tts';
 import { TeachBackVoiceConnection, type RealtimeTurn } from '@/lib/teachback/realtimeVoice';
 import {
-  restoredLines, sendWithOneResend, teachBackFailure, teachBackFailureMessage, teachBackPayload,
+  restoredLines, teachBackFailure, teachBackFailureMessage, teachBackPayload,
   type TeachBackLine, type TeachBackSource,
 } from '@/lib/teachback/connected';
 import { PupilMark, Thinking } from '@/components/teach/TeachMarks';
@@ -236,7 +236,8 @@ export default function ConnectedTeachBackClient() {
       useNumeraStore.getState().addTranscriptMessage({ role: 'student', text: value.trim() });
       setText('');
       // Same object on every retry, so the backend recognises it (turn_id + content).
-      await runTurn(value.trim(), () => sendWithOneResend(() => sendSynchronizedInteraction(payload)));
+      // sendSynchronizedInteraction already resends once on a transient failure.
+      await runTurn(value.trim(), () => sendSynchronizedInteraction(payload));
     } catch (cause) {
       setError(teachBackFailureMessage(teachBackFailure(cause)));
     } finally {

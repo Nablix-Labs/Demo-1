@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { AxiosError, AxiosHeaders } from 'axios';
 import {
-  restoredLines, sendWithOneResend, teachBackFailure, teachBackFailureMessage, teachBackPayload,
+  restoredLines, teachBackFailure, teachBackFailureMessage, teachBackPayload,
 } from '@/lib/teachback/connected';
+import { sendWithOneResend } from '@/lib/transientFailure';
 
 const session = {
   sessionId: 'SES-1', studentId: 'ST015', conceptId: 'ALG_NOTATION', hintCount: 2,
@@ -104,11 +105,11 @@ describe('teachBackFailure', () => {
   });
 });
 
-describe('sendWithOneResend', () => {
+describe('sendWithOneResend (shared by every tutor call)', () => {
   const invalid = () => axiosError(422, { error_code: 'INVALID_TEACH_BACK_REPLY', message: 'bad reply' });
 
   it('resends once after an invalid tutor reply or a server error, then succeeds', async () => {
-    for (const first of [invalid(), axiosError(503, { error_code: 'HTTP_ERROR', message: 'x' }), axiosError(undefined)]) {
+    for (const first of [invalid(), axiosError(503, { error_code: 'ADAPTER_UNAVAILABLE', message: 'x' }), axiosError(undefined)]) {
       let calls = 0;
       const out = await sendWithOneResend(async () => { calls++; if (calls === 1) throw first; return 'ok'; }, 0);
       expect(out).toBe('ok');
@@ -131,5 +132,12 @@ describe('sendWithOneResend', () => {
       await expect(sendWithOneResend(async () => { calls++; throw err; }, 0)).rejects.toBe(err);
       expect(calls).toBe(1);
     }
+  });
+
+  it('does not resend a timeout: the first turn may still be running', async () => {
+    const timeout = axiosError(undefined); timeout.code = 'ECONNABORTED';
+    let calls = 0;
+    await expect(sendWithOneResend(async () => { calls++; throw timeout; }, 0)).rejects.toBe(timeout);
+    expect(calls).toBe(1);
   });
 });
