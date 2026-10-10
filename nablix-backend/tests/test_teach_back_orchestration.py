@@ -663,6 +663,7 @@ def test_live_realtime_teach_back_tool(upstream: dict[str, object], monkeypatch:
                             arguments = json.loads(event["arguments"])
                         if event["type"] == "response.done":
                             assert event["response"]["status"] == "completed"
+                            print(json.dumps({"realtime_model": model, "usage": event["response"]["usage"]}))
                             break
                 assert arguments is not None
                 result = realtime_result(session_id, "TURN-001", transcript, verdict)
@@ -766,6 +767,7 @@ def test_live_realtime_curious_student_conversation(upstream: dict[str, object],
                                 arguments = json.loads(event["arguments"])
                             if event["type"] == "response.done":
                                 assert event["response"]["status"] == "completed"
+                                print(json.dumps({"realtime_model": model, "usage": event["response"]["usage"]}))
                                 break
                     assert arguments is not None
                     if index == rejected_turn and attempt == 0:

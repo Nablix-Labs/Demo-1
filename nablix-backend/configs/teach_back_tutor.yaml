@@ -62,7 +62,7 @@ forbidden_student_text_patterns:
   - "assessment label"
 realtime:
   enabled: true
-  model: gpt-realtime-2.1-mini
+  model: gpt-realtime-2.1
   transcription_model: gpt-4o-mini-transcribe
   client_secret_url: https://api.openai.com/v1/realtime/client_secrets
   calls_url: https://api.openai.com/v1/realtime/calls
