@@ -4,6 +4,8 @@ backend_model: gpt-6-luna
 reasoning_effort: low
 # Recent messages the grader reads to understand what the latest answer refers to (never as evidence).
 grader_history_messages: 4
+# The reply writer sees its own last replies so it does not repeat their wording.
+recent_reply_count: 3
 # Spoken and written maths count as the same student words when checking quoted evidence.
 spoken_maths_words:
   "+": plus
@@ -14,8 +16,15 @@ spoken_maths_words:
   "=": equals
 opening_message: "I'm your curious student for a moment. Can you teach me the main idea behind {skill_name}, in your own words?"
 return_to_orientation_message: "Let's revisit this idea together, then you can teach it back to me."
-voice_clarification_message: "I didn't catch that clearly. Could you say the idea again?"
-acknowledgement_message: "Help me understand the idea in your own words, as if I'm learning it from you."
+# Fixed replies (no AI call). The tutor uses one it has not said on recent turns.
+voice_clarification_messages:
+  - "I didn't catch that clearly. Could you say the idea again?"
+  - "Sorry, I missed some of that. Could you tell me again?"
+  - "That came through a bit unclear for me. Can you say it once more?"
+acknowledgement_messages:
+  - "Help me understand the idea in your own words, as if I'm learning it from you."
+  - "I'm still curious about this one. How would you explain it to me?"
+  - "Take me through it in your own words, and I'll follow along."
 completion_message: "I follow the ideas you've explained. Let's use them together in some problems."
 invalid_response_message: "The tutor could not produce a valid Teach-Back reply. Please try again."
 curious_student_pattern: '\b(?:i|me|my)\b'
@@ -103,6 +112,8 @@ realtime:
   turn_detection:
     type: semantic_vad
     eagerness: medium
+  # A Live turn made only of these words is ignored and the mic keeps listening.
+  filler_words: [um, umm, uh, uhh, erm, er, hmm, hm, mm, mhm, ah, oh, okay, ok, so, well, like, right]
   client_secret_url: https://api.openai.com/v1/realtime/client_secrets
   calls_url: https://api.openai.com/v1/realtime/calls
   token_lifetime_seconds: 60

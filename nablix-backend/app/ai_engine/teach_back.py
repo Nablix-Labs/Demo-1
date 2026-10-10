@@ -33,6 +33,7 @@ class TeachBackRealtimeConfig(BaseModel):
     token_lifetime_seconds: int = Field(ge=10, le=600)
     response_timeout_seconds: int = Field(ge=5, le=120)
     speaker_instructions: str = Field(min_length=1)
+    filler_words: list[str]
 
 
 class TeachBackConfig(BaseModel):
@@ -42,8 +43,8 @@ class TeachBackConfig(BaseModel):
     max_failed_explanations: int = Field(ge=1)
     opening_message: str
     return_to_orientation_message: str
-    voice_clarification_message: str
-    acknowledgement_message: str
+    voice_clarification_messages: list[str] = Field(min_length=1)
+    acknowledgement_messages: list[str] = Field(min_length=1)
     completion_message: str
     invalid_response_message: str
     forbidden_student_text_patterns: list[str]
@@ -51,6 +52,7 @@ class TeachBackConfig(BaseModel):
     backend_model: str = Field(min_length=1)
     reasoning_effort: str | None
     grader_history_messages: int = Field(ge=0)
+    recent_reply_count: int = Field(ge=0)
     spoken_maths_words: dict[str, str]
     curious_student_pattern: str
     grading_phrases: list[str]
@@ -74,6 +76,19 @@ def quotes_student_words(claim: str | None, student_input: str) -> bool:
 
     quoted = plain(claim or "")
     return bool(quoted) and f" {quoted} " in f" {plain(student_input)} "
+
+
+def recent_tutor_replies(history: list[ConversationMessage]) -> list[str]:
+    count = load_teach_back_config().recent_reply_count
+    replies = [message.content for message in history if message.role == "assistant"]
+    return replies[-count:] if count else []
+
+
+def repeated_sentence(reply: TeachBackReply, recent_replies: list[str]) -> str | None:
+    """A sentence of this reply the tutor already said word for word on a recent turn."""
+    said = {sentence.strip().casefold() for text in recent_replies for sentence in re.findall(r"[^.!?]+[.!?]", text)}
+    return next((sentence.strip() for sentence in re.findall(r"[^.!?]+[.!?]", reply.tutor_message)
+                 if sentence.strip().casefold() in said), None)
 
 
 def teach_back_action(content: TeachBackPayload, verdict: str | None) -> TeachBackAction:
@@ -146,17 +161,21 @@ def validate_teach_back_reply(content: TeachBackPayload, reply: TeachBackReply) 
 
 def teach_back_input_reply(
     student_input: str, input_source: str, transcript_confidence: float | None,
+    history: list[ConversationMessage] | None = None,
 ) -> TeachBackReply | None:
     config = load_teach_back_config()
     rules = load_classifier_rules()
+    recent = recent_tutor_replies(history or [])
     clarification: str | None = None
     if not check_student_message_safety(student_input, rules).passed:
         clarification = rules.messages.SAFETY_RESPONSE
     elif input_source == "VOICE" and is_low_confidence(transcript_confidence, rules):
-        clarification = config.voice_clarification_message
+        clarification = next((m for m in config.voice_clarification_messages if m not in recent),
+                             config.voice_clarification_messages[len(recent) % len(config.voice_clarification_messages)])
     elif (not student_input.strip() or student_input.strip().lower() in rules.conversation_rules.acknowledgement_phrases
           or any(re.fullmatch(pattern, student_input.strip(), flags=re.IGNORECASE) for pattern in config.non_explanation_patterns)):
-        clarification = config.acknowledgement_message
+        clarification = next((m for m in config.acknowledgement_messages if m not in recent),
+                             config.acknowledgement_messages[len(recent) % len(config.acknowledgement_messages)])
     if clarification is not None:
         return TeachBackReply(
             evaluation=TeachBackEvaluation(understanding_status=None, misconception_detected=False,
@@ -261,7 +280,7 @@ def generate_teach_back_reply(
     history: list[ConversationMessage],
 ) -> TeachBackReply:
     validate_teach_back_content(content)
-    input_reply = teach_back_input_reply(student_input, input_source, transcript_confidence)
+    input_reply = teach_back_input_reply(student_input, input_source, transcript_confidence, history)
     if input_reply is not None:
         return input_reply
     rules = load_classifier_rules()
@@ -272,6 +291,8 @@ def generate_teach_back_reply(
     verified = evaluate_teach_back_answer(content, student_input, history)
     context = build_teach_back_context(content, student_input, input_source, transcript_confidence)
     context["verified_evaluation"] = verified.model_dump()
+    recent = recent_tutor_replies(history)
+    context["your_recent_replies"] = recent
     for attempt in range(settings.adapter_request_retry_count + 1):
         raw_reply = client.generate_teach_back(
             context, TeachBackReply.model_json_schema(), history[-rules.conversation_rules.max_recent_messages:] if rules.conversation_rules.max_recent_messages else [],
@@ -283,6 +304,12 @@ def generate_teach_back_reply(
                 raise ValueError("The tutor must copy the backend verified_evaluation exactly; wording cannot change the current-target assessment.")
             validate_teach_back_reply(content, reply)
             validate_teach_back_wording(reply, student_input)
+            # A repeat is worth one more try, but a valid reply is better than no reply.
+            repeat = repeated_sentence(reply, recent)
+            if repeat is not None and attempt < settings.adapter_request_retry_count:
+                logger.info("teach_back_reply_repeated", extra={"attempt": attempt + 1, "sentence": repeat})
+                context = {**context, "response_validation_error": f'You already said "{repeat}" on a recent turn. Say it differently.'}
+                continue
             return reply
         except (ValidationError, ValueError) as error:
             if attempt == settings.adapter_request_retry_count:

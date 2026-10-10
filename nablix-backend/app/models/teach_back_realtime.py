@@ -14,3 +14,4 @@ class TeachBackRealtimeSession(BaseModel):
     response_timeout_seconds: int
     request_retry_count: int
     speaker_instructions: str
+    filler_words: list[str]

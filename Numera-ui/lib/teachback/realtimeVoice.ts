@@ -14,6 +14,7 @@ interface RealtimeSession {
   response_timeout_seconds: number;
   request_retry_count: number;
   speaker_instructions: string;
+  filler_words: string[];
 }
 
 interface RealtimeEvent {
@@ -42,6 +43,12 @@ const SPOKEN_WORDS_PER_SECOND = 2.2;
 export function transcriptConfidence(logprobs: RealtimeEvent['logprobs']): number | null {
   if (!logprobs?.length || logprobs.some((entry) => !Number.isFinite(entry.logprob) || entry.logprob > 0)) return null;
   return Math.exp(logprobs.reduce((sum, entry) => sum + entry.logprob, 0) / logprobs.length);
+}
+
+/** A turn made only of fillers ("um", "okay so") is thinking out loud, not an answer. */
+export function isOnlyFiller(text: string, fillerWords: string[]): boolean {
+  const words = text.toLowerCase().match(/[a-z']+/g) ?? [];
+  return words.length > 0 && !/\d/.test(text) && words.every((word) => fillerWords.includes(word));
 }
 
 /** The request that makes Realtime say exactly the approved words and nothing else. */
@@ -226,7 +233,7 @@ export class TeachBackVoiceConnection {
         const text = (event.transcript ?? '').trim();
         this.heard = '';
         this.events.onHeard('');
-        if (text) this.events.onTranscript(text, transcriptConfidence(event.logprobs));
+        if (text && !isOnlyFiller(text, this.session.filler_words)) this.events.onTranscript(text, transcriptConfidence(event.logprobs));
         else this.listen();
         break;
       }
