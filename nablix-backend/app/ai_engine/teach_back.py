@@ -13,7 +13,7 @@ from app.core.config import get_settings
 from app.core.exceptions import AdapterError
 from app.core.logger import logger
 from app.models.adapters import ConversationMessage
-from app.models.teach_back import TeachBackAction, TeachBackEvaluation, TeachBackPayload, TeachBackReply
+from app.models.teach_back import TeachBackAction, TeachBackEvaluation, TeachBackEvidenceEvaluation, TeachBackPayload, TeachBackReply
 
 
 class TeachBackRealtimeConfig(BaseModel):
@@ -44,6 +44,12 @@ class TeachBackConfig(BaseModel):
     invalid_response_message: str
     forbidden_student_text_patterns: list[str]
     non_explanation_patterns: list[str]
+    backend_model: str = Field(min_length=1)
+    curious_student_pattern: str
+    grading_phrases: list[str]
+    clear_question_pattern: str
+    unclear_question_phrases: list[str]
+    evaluation_instructions: str
 
 
 @lru_cache(maxsize=1)
@@ -149,6 +155,62 @@ def teach_back_input_reply(
     return None
 
 
+def validate_teach_back_wording(reply: TeachBackReply, student_input: str) -> None:
+    config = load_teach_back_config()
+    for wording in (reply.tutor_message, reply.tutor_message_voice):
+        if not re.search(config.curious_student_pattern, wording, re.IGNORECASE):
+            raise ValueError("Both Teach-Back messages must speak as a curious learner: use I, me or my, such as 'Can you teach me...?' or 'I follow...'.")
+        if any(phrase.casefold() in wording.casefold() for phrase in config.grading_phrases):
+            raise ValueError("Teach-Back must reflect understanding as a learner, without grading or teacher praise.")
+        if re.search(config.clear_question_pattern, student_input.strip(), re.IGNORECASE) and any(
+            phrase.casefold() in wording.casefold() for phrase in config.unclear_question_phrases
+        ):
+            raise ValueError("The student asked a clear question. Answer it directly; do not pretend their speech was unclear or say I couldn't follow. Keep the curious-student voice.")
+        if re.search(config.clear_question_pattern, student_input.strip(), re.IGNORECASE):
+            first_sentence = re.search(r"[^.!?]+[.!?]", wording)
+            if first_sentence is None or first_sentence[0].endswith("?"):
+                raise ValueError("Answer this clear conceptual question first with a declarative sentence based on the supplied concept or worked example, using I or me. Then ask at most one curious-student follow-up. Do not ask the student to answer their own question.")
+
+
+def evaluate_teach_back_answer(content: TeachBackPayload, student_input: str) -> TeachBackEvaluation:
+    """Assess only the current conceptual claim, without generating tutor wording."""
+    validate_teach_back_content(content)
+    config = load_teach_back_config()
+    settings = get_settings()
+    client = build_openai_ai_engine_client(settings.model_copy(update={"openai_ai_engine_model": load_teach_back_config().backend_model}))
+    if client is None:
+        raise AdapterError("teach_back_evaluation", "Teach-Back verification requires the configured AI engine and an API key.")
+    target = next(target for target in content.targets if target.micro_skill_id == content.state.current_micro_skill_id)
+    schema = TeachBackEvidenceEvaluation.model_json_schema()
+    codes = [misconception.error_code for misconception in target.known_misconceptions]
+    schema["$defs"]["TeachBackEvaluation"]["properties"]["error_code"] = {"enum": [None, *codes]}
+    last = content.state.last_tutor_response
+    context: dict[str, object] = {
+        "current_target": target.model_dump(), "student_input": student_input,
+        "last_tutor_question": last.tutor_response if last is not None else None,
+        "completed_concepts": [target.expected_concept for target in content.targets
+                               if target.micro_skill_id in content.state.completed_micro_skill_ids],
+    }
+    for attempt in range(settings.adapter_request_retry_count + 1):
+        raw = client.evaluate_teach_back(context, schema, config.evaluation_instructions)
+        try:
+            checked = TeachBackEvidenceEvaluation.model_validate(raw)
+            claim = checked.student_claim.strip().strip('"“”') if checked.student_claim is not None else ""
+            if checked.evaluation.understanding_status is not None and (not claim or claim.casefold() not in student_input.casefold()):
+                raise ValueError("A graded current-target assessment must quote this student's actual claim.")
+            if checked.evaluation.understanding_status is None and checked.student_claim is not None:
+                raise ValueError("Discussion has no graded current-target student claim.")
+            if checked.evaluation.error_code is not None and checked.evaluation.error_code not in codes:
+                raise ValueError("The verifier returned an unknown current-target misconception code.")
+            return checked.evaluation
+        except (ValidationError, ValueError) as error:
+            logger.warning("teach_back_evaluation_retry", extra={"attempt": attempt + 1, "validation_error": str(error), "response": raw})
+            if attempt == settings.adapter_request_retry_count:
+                raise AdapterError("teach_back_evaluation", config.invalid_response_message) from error
+            context = {**context, "response_validation_error": str(error)}
+    raise AdapterError("teach_back_evaluation", config.invalid_response_message)
+
+
 def build_teach_back_context(
     content: TeachBackPayload, student_input: str, input_source: str,
     transcript_confidence: float | None,
@@ -184,17 +246,22 @@ def generate_teach_back_reply(
         return input_reply
     rules = load_classifier_rules()
     settings = get_settings()
-    client = build_openai_ai_engine_client(settings)
+    client = build_openai_ai_engine_client(settings.model_copy(update={"openai_ai_engine_model": load_teach_back_config().backend_model}))
     if client is None:
         raise AdapterError("teach_back", "Teach-Back requires the configured AI engine and an API key.")
+    verified = evaluate_teach_back_answer(content, student_input)
     context = build_teach_back_context(content, student_input, input_source, transcript_confidence)
+    context["verified_evaluation"] = verified.model_dump()
     for attempt in range(settings.adapter_request_retry_count + 1):
         raw_reply = client.generate_teach_back(
             context, TeachBackReply.model_json_schema(), history[-rules.conversation_rules.max_recent_messages:] if rules.conversation_rules.max_recent_messages else []
         )
         try:
             reply = TeachBackReply.model_validate(raw_reply)
+            if reply.evaluation != verified:
+                raise ValueError("The tutor must copy the backend verified_evaluation exactly; wording cannot change the current-target assessment.")
             validate_teach_back_reply(content, reply)
+            validate_teach_back_wording(reply, student_input)
             return reply
         except (ValidationError, ValueError) as error:
             if attempt == settings.adapter_request_retry_count:
