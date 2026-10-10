@@ -10,7 +10,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from app.ai_engine.teach_back import evaluate_teach_back_answer, teach_back_action, teach_back_input_reply, validate_teach_back_content, validate_teach_back_reply, validate_teach_back_wording
+from app.ai_engine.teach_back import evaluate_teach_back_answer, load_teach_back_config, teach_back_action, teach_back_input_reply, validate_teach_back_content, validate_teach_back_reply, validate_teach_back_wording
 from app.models.session import PendingTeachBackOperation, TeachBackReceipt
 from app.models.teach_back import TeachBackPayload, TeachBackReply, TeachBackStoredReply
 from app.models.teach_back_realtime import TeachBackRealtimeResult
@@ -4127,7 +4127,7 @@ async def process_realtime_teach_back(
                         "student_evidence": evidence, "student_input": student_input,
                     })
                     raise HTTPException(status_code=422, detail={"code": "INVALID_TEACH_BACK_REPLY",
-                                        "message": "A graded verdict must quote a current-target claim from this student turn, not a lesson or earlier explanation. Correct claims about only a completed concept have a null verdict and null student_evidence."})
+                                        "message": load_teach_back_config().invalid_student_evidence_message})
             elif evidence is not None:
                 raise HTTPException(status_code=422, detail={"code": "INVALID_TEACH_BACK_REPLY",
                                     "message": "Only a graded verdict can include current-target student evidence."})

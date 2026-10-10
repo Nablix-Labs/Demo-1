@@ -44,6 +44,7 @@ async def realtime_teach_back_context(
     instructions = "\n\n".join(message["content"] for message in messages if message["role"] == "system")
     instructions += "\n" + config.realtime.transport_instructions
     schema = TeachBackRealtimeReply.model_json_schema()
+    schema["properties"]["student_evidence"]["description"] = config.realtime.student_evidence_description
     schema["properties"] = {"student_evidence": schema["properties"]["student_evidence"],
                             **{name: value for name, value in schema["properties"].items() if name != "student_evidence"}}
     schema["required"] = ["student_evidence", *[name for name in schema["required"] if name != "student_evidence"]]

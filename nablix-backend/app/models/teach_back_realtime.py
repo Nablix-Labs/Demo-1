@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 from app.models.interaction import InteractionRequest
 from app.models.teach_back import TeachBackReply
@@ -12,7 +12,7 @@ class TeachBackRealtimeStart(BaseModel):
 
 
 class TeachBackRealtimeReply(TeachBackReply):
-    student_evidence: str | None = Field(description="Choose this FIRST. Copy a complete claim from the latest transcript that directly expresses or contradicts current_target.expected_concept, without adding quotation marks. Null for questions, unclear speech, or a correct statement about ONLY an already-completed concept. Never quote earlier turns or teaching context. Only a non-null relevant claim can have a graded verdict.")
+    student_evidence: str | None
 
 
 class TeachBackRealtimeResult(BaseModel):

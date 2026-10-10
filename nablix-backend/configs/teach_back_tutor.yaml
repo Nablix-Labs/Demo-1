@@ -6,13 +6,25 @@ voice_clarification_message: "I didn't catch that clearly. Could you say the ide
 acknowledgement_message: "Help me understand the idea in your own words, as if I'm learning it from you."
 completion_message: "I follow the ideas you've explained. Let's use them together in some problems."
 invalid_response_message: "The tutor could not produce a valid Teach-Back reply. Please try again."
+invalid_student_evidence_message: >-
+  student_evidence is missing or is not a verbatim substring of the latest
+  transcript. Copy one short, complete current-target claim exactly as written
+  in that transcript, preserving its words, punctuation and spoken maths.
+  Do not paraphrase, join separate sentences, or turn 'plus 4' into '+4'.
+  Regenerate the proposal for the same student turn; do not ask the student to
+  repeat it or change an otherwise correct verdict just to avoid this check.
+  If this turn contains no current-target claim, use null evidence and a null
+  verdict. Claims about ONLY completed concepts remain ungraded.
 curious_student_pattern: '\b(?:i|me|my)\b'
 evaluation_instructions: >-
   Assess a student's latest conceptual explanation against ONLY
   current_target.expected_concept. You are an internal assessor, not a tutor:
   do not teach, praise, correct, roleplay or generate a next question.
   First choose student_claim: copy only an actual complete latest-input claim
-  that expresses or contradicts this CURRENT concept. Correct statements about
+  that expresses or contradicts this CURRENT concept. Copy a contiguous
+  substring verbatim, preserving words and punctuation; do not convert spoken
+  maths into symbols, paraphrase, or combine separate transcript sentences.
+  Correct statements about
   ONLY completed_concepts do not demonstrate a different current concept;
   return student_claim=null and understanding_status=null. A claim that meets
   current_target.expected_concept is current-target evidence even when a
@@ -73,6 +85,15 @@ realtime:
   response_timeout_seconds: 45
   tool_name: record_teach_back_reply
   tool_description: Submit one conceptual Teach-Back evaluation and proposed tutor reply for the backend to validate and record.
+  student_evidence_description: >-
+    Choose this FIRST. Copy one short, complete claim as a contiguous verbatim
+    substring of the latest transcript that directly expresses or contradicts
+    current_target.expected_concept. Preserve every word and punctuation mark;
+    do not turn spoken maths into symbols, paraphrase, correct grammar, or join
+    separate sentences. For example, copy 'plus 4' as 'plus 4', never '+4'.
+    Null for questions, unclear speech, or correct statements about ONLY
+    completed concepts. Never borrow earlier explanations or lesson text.
+    Only a non-null current-target claim can have a graded verdict.
   transport_instructions: >-
     Apply all the Teach-Back rules above. For this transport return the requested
     JSON as arguments to record_teach_back_reply, once per student turn, rather
@@ -103,7 +124,12 @@ realtime:
     assessment or ask the learner to explain those concepts again. The last
     accepted tutor message only identifies what the current answer refers to.
     Choose student_evidence BEFORE evaluation or tutor wording. It must quote
-    a complete latest-transcript claim that directly expresses or contradicts
+    one short, complete claim copied as a contiguous verbatim substring of
+    the latest transcript, preserving its words and punctuation. Never convert
+    spoken maths to symbols: 'plus 4' must stay 'plus 4', not '+4'. Do not
+    paraphrase, fix grammar, or combine separate sentences. Check that the
+    copied substring occurs in the latest transcript before submitting.
+    The claim must directly express or contradict
     current_target.expected_concept. A mathematically correct statement about
     ONLY a completed_concepts entry is NOT evidence of the current concept:
     student_evidence=null, understanding_status=null, no failure and no progress.

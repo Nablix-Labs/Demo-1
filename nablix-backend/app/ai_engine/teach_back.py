@@ -28,6 +28,7 @@ class TeachBackRealtimeConfig(BaseModel):
     response_timeout_seconds: int = Field(ge=5, le=120)
     tool_name: str
     tool_description: str
+    student_evidence_description: str
     transport_instructions: str
 
 
@@ -42,6 +43,7 @@ class TeachBackConfig(BaseModel):
     acknowledgement_message: str
     completion_message: str
     invalid_response_message: str
+    invalid_student_evidence_message: str
     forbidden_student_text_patterns: list[str]
     non_explanation_patterns: list[str]
     backend_model: str = Field(min_length=1)
