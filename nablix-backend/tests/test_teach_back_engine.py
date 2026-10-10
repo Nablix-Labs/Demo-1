@@ -239,3 +239,37 @@ def test_grader_reads_recent_history_as_context(monkeypatch: pytest.MonkeyPatch)
     limit = teach_back.load_teach_back_config().grader_history_messages
     assert contexts[0]["recent_history"] == [message.model_dump() for message in history[-limit:]]
     assert contexts[0]["student_input"] == "A letter stands for a number"
+
+
+def test_fixed_replies_rotate_instead_of_repeating() -> None:
+    config = teach_back.load_teach_back_config()
+    first = teach_back.teach_back_input_reply("okay", "TEXT", None, [])
+    assert first is not None and first.tutor_message == config.acknowledgement_messages[0]
+    history = [ConversationMessage(role="assistant", content=first.tutor_message), ConversationMessage(role="user", content="okay")]
+    second = teach_back.teach_back_input_reply("next please", "TEXT", None, history)
+    assert second is not None and second.tutor_message == config.acknowledgement_messages[1]
+    unclear = teach_back.teach_back_input_reply("the letter is", "VOICE", 0.1, history)
+    assert unclear is not None and unclear.tutor_message in config.voice_clarification_messages
+
+
+def test_writer_sees_recent_replies_and_retries_a_repeat_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    contexts: list[dict[str, object]] = []
+    repeated = "I couldn't follow that last part. Could you explain it to me?"
+
+    class WriterClient:
+        def evaluate_teach_back(self, context: dict[str, object], schema: dict[str, object], instructions: str, reasoning_effort: str | None) -> dict[str, object]:
+            return {"student_claim": None, "evaluation": {"understanding_status": None, "misconception_detected": False, "error_code": None, "unmapped_misconception_description": None}}
+
+        def generate_teach_back(self, context: dict[str, object], schema: dict[str, object], history: list[ConversationMessage], reasoning_effort: str | None) -> dict[str, object]:
+            contexts.append(context)
+            return {"evaluation": context["verified_evaluation"], "tutor_message": repeated, "tutor_message_voice": repeated, "next_action": "DISCUSS_AND_CLARIFY"}
+
+    monkeypatch.setattr(teach_back, "build_openai_ai_engine_client", lambda settings: WriterClient())
+    monkeypatch.setattr(teach_back, "get_settings", lambda: Settings(use_openai_ai_engine=True, openai_api_key="test-key", adapter_request_retry_count=1))
+    content = TeachBackPayload.model_validate(teach_back_content())
+    history = [ConversationMessage(role="assistant", content=repeated), ConversationMessage(role="user", content="the letter")]
+    reply = teach_back.generate_teach_back_reply(content, "the letter is, um", "TEXT", None, history)
+    assert contexts[0]["your_recent_replies"] == [repeated]
+    assert "already said" in contexts[1]["response_validation_error"]
+    # Out of retries: a valid repeat is still better than no reply.
+    assert reply.tutor_message == repeated and len(contexts) == 2

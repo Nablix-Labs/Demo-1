@@ -409,7 +409,8 @@ def test_realtime_session_only_hears_and_speaks(upstream: dict[str, object], mon
     assert started.json() == {"client_secret": "ek_test", "calls_url": config.calls_url,
                               "response_timeout_seconds": config.response_timeout_seconds,
                               "request_retry_count": Settings().adapter_request_retry_count,
-                              "speaker_instructions": config.speaker_instructions}
+                              "speaker_instructions": config.speaker_instructions,
+                              "filler_words": config.filler_words}
     session = sent[0]["session"]
     assert session["output_modalities"] == ["audio"] and "tools" not in session
     assert session["audio"]["input"]["turn_detection"] == {**config.turn_detection, "create_response": False, "interrupt_response": False}

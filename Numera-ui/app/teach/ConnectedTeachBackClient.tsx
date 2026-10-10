@@ -10,8 +10,10 @@
  * understood) moves on. The global phase router does the navigation once the
  * reply has been spoken. No canvas, score, attempt counter or hint ladder.
  *
- * Live voice only changes the ears and the mouth: Realtime hears the student
- * and says the approved reply, while every turn is graded by the same
+ * Live voice is the main mode when the backend enables it and the browser can
+ * run it; Standard is the fallback if it is off, unsupported or fails. Live
+ * voice only changes the ears and the mouth: Realtime hears the student and
+ * says the approved reply, while every turn is graded by the same
  * /interaction call as Standard mode.
  *
  * Request rules and failure handling live in lib/teachback/connected.ts.
@@ -42,6 +44,13 @@ interface PendingTurn {
   studentText: string;
   previousTutorTurnId: string | null;
   send: () => Promise<InteractionResponse>;
+}
+
+const LIVE_FALLBACK_MESSAGE = 'Live voice isn’t working right now, so Numera switched to Standard. You can still talk or type, or switch back to Live voice at the top.';
+
+/** WebRTC and a microphone API: what Live voice needs from the browser. */
+function browserSupportsLiveVoice(): boolean {
+  return typeof window !== 'undefined' && 'RTCPeerConnection' in window && Boolean(navigator.mediaDevices?.getUserMedia);
 }
 
 /** Longest we wait for the tutor's voice to end before unlocking or moving on anyway. */
@@ -114,7 +123,9 @@ export default function ConnectedTeachBackClient() {
           api.get<{ realtime_enabled: boolean }>('/voice/teach-back/options').catch(() => ({ data: { realtime_enabled: false } })),
         ]);
         if (cancelled || !rec) return;
-        setRealtimeEnabled(Boolean(options.data.realtime_enabled));
+        const live = Boolean(options.data.realtime_enabled) && browserSupportsLiveVoice();
+        setRealtimeEnabled(live);
+        setMode(live ? 'realtime' : 'standard');
         // Arriving from orientation, the handoff queued this line for speech.
         // Claim it here, or the guided screen would speak it later.
         const claimed = useNumeraStore.getState().claimPendingTutorSpeech();
@@ -153,9 +164,12 @@ export default function ConnectedTeachBackClient() {
     window.setTimeout(finish, HANDOFF_FALLBACK_MS);
   }, []);
 
-  const begin = () => {
+  // A click, so the browser allows audio and the mic prompt. In Live voice,
+  // connect first so the opening line is already in the live voice.
+  const begin = async () => {
     setStarted(true);
-    if (opening) speak(opening.voice); // a click, so the browser allows audio
+    if (mode === 'realtime') await connectVoice();
+    if (opening && mounted.current) speak(opening.voice);
   };
 
   const present = useCallback((response: InteractionResponse) => {
@@ -284,7 +298,8 @@ export default function ConnectedTeachBackClient() {
           if (!mounted.current) return;
           setConnected(false);
           setHeard('');
-          setError('Live voice disconnected. Press Start live voice to carry on, or switch to Standard.');
+          setMode('standard');
+          setError(LIVE_FALLBACK_MESSAGE);
         },
       });
       if (!mounted.current || useNumeraStore.getState().sessionId !== id) { live.close(false); return; }
@@ -293,7 +308,10 @@ export default function ConnectedTeachBackClient() {
       setConnected(true);
     } catch (cause) {
       console.warn('teach_back_voice_connect_failed', cause);
-      setError('Live voice could not start. Check that the microphone is allowed, or switch to Standard.');
+      if (mounted.current) {
+        setMode('standard');
+        setError(LIVE_FALLBACK_MESSAGE);
+      }
     } finally {
       if (mounted.current) setBusy(false);
     }
@@ -357,7 +375,7 @@ export default function ConnectedTeachBackClient() {
         </div>
         {realtimeEnabled && (
           <div className="flex rounded-full bg-[#F6E9D0] p-1 text-[12px] font-semibold" role="group" aria-label="Voice mode">
-            {(['standard', 'realtime'] as const).map((m) => (
+            {(['realtime', 'standard'] as const).map((m) => (
               <button
                 key={m}
                 disabled={busy || speaking || listening || pending !== null}
@@ -483,7 +501,7 @@ export default function ConnectedTeachBackClient() {
               score. Numera just wants to understand.
             </p>
             <button
-              onClick={begin}
+              onClick={() => void begin()}
               className="mt-6 inline-flex items-center gap-2 rounded-full bg-action-orange px-6 py-3 text-[14px] font-semibold text-white transition hover:brightness-105"
             >
               Start teaching <ArrowRight size={16} strokeWidth={2.2} />

@@ -58,4 +58,5 @@ async def start_realtime_teach_back(
     return TeachBackRealtimeSession(client_secret=secret.value, calls_url=config.calls_url,
                                     response_timeout_seconds=config.response_timeout_seconds,
                                     request_retry_count=settings.adapter_request_retry_count,
-                                    speaker_instructions=config.speaker_instructions)
+                                    speaker_instructions=config.speaker_instructions,
+                                    filler_words=config.filler_words)

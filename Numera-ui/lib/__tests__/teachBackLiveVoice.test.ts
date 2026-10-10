@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { TeachBackVoiceConnection, speakRequest, transcriptConfidence, type TeachBackVoiceEvents } from '@/lib/teachback/realtimeVoice';
+import { TeachBackVoiceConnection, isOnlyFiller, speakRequest, transcriptConfidence, type TeachBackVoiceEvents } from '@/lib/teachback/realtimeVoice';
 
 const session = {
   client_secret: 'ek_test', calls_url: 'https://example.test/calls', response_timeout_seconds: 45,
   request_retry_count: 1, speaker_instructions: 'Say only the words in <say>.',
+  filler_words: ['um', 'uh', 'okay', 'so', 'hmm'],
 };
 
 function liveVoice() {
@@ -55,6 +56,26 @@ describe('Live voice hears the student', () => {
     receive({ type: 'conversation.item.input_audio_transcription.failed', item_id: 'item-2', error: { message: 'bad audio' } });
     expect(track.enabled).toBe(true);
     expect(events.onTranscript).not.toHaveBeenCalled();
+  });
+});
+
+describe('Live voice ignores thinking out loud', () => {
+  it('keeps listening instead of sending a turn made only of fillers', () => {
+    const { voice, track, events, receive } = liveVoice();
+    voice.pause();
+    receive({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'item-1', transcript: 'Okay, so... um.' });
+    expect(events.onTranscript).not.toHaveBeenCalled();
+    expect(track.enabled).toBe(true);
+    receive({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'item-2', transcript: 'Okay so n changes.' });
+    expect(events.onTranscript).toHaveBeenCalledWith('Okay so n changes.', null);
+  });
+
+  it('only treats a turn as filler when every word is one', () => {
+    const fillers = session.filler_words;
+    expect(isOnlyFiller('Um, hmm.', fillers)).toBe(true);
+    expect(isOnlyFiller('so 4', fillers)).toBe(false);
+    expect(isOnlyFiller('so the letter', fillers)).toBe(false);
+    expect(isOnlyFiller('', fillers)).toBe(false);
   });
 });
 
