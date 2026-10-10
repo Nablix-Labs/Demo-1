@@ -10,10 +10,9 @@ from uuid import uuid4
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from app.ai_engine.teach_back import evaluate_teach_back_answer, load_teach_back_config, teach_back_action, teach_back_input_reply, validate_teach_back_content, validate_teach_back_reply, validate_teach_back_wording
+from app.ai_engine.teach_back import teach_back_input_reply, validate_teach_back_reply, validate_teach_back_wording
 from app.models.session import PendingTeachBackOperation, TeachBackReceipt
 from app.models.teach_back import TeachBackPayload, TeachBackReply, TeachBackStoredReply
-from app.models.teach_back_realtime import TeachBackRealtimeResult
 from app.models.student_model_session import TeachBackTurnRecordedEvent, TeachBackCompletedEvent
 from app.services.session_service import store_teach_back_state, require_teach_back_recovered, _schema_request_id, _schema_timestamp
 
@@ -4085,76 +4084,6 @@ async def _record_teach_back_reply(
     session = await store_teach_back_state(session.model_copy(update={"pending_teach_back": operation}))
     session, response = await _resume_teach_back(session, access_token)
     return await _cache_response(request, response)
-
-
-async def process_realtime_teach_back(
-    result: TeachBackRealtimeResult, access_token: str,
-) -> InteractionResponse | StaleTurnResponse:
-    """Record a Realtime tool reply using the existing rules and durable event flow."""
-    request = result.interaction
-    if (request.current_phase != "TEACH_BACK"
-            or request.interaction_type != "TEACH_BACK_SUBMISSION"
-            or request.input_source not in {"TEXT", "VOICE"}
-            or request.canvas_state is not None or request.canvas_snapshot_id is not None):
-        raise HTTPException(status_code=422, detail="Realtime results require a text or voice Teach-Back submission without canvas.")
-    async with interaction_lock_for(request.session_id):
-        session = _get_owned_session_for_turn(request.session_id, request.student_id, request.current_phase, request.hint_count)
-        duplicate = _duplicate_turn_response(request, session)
-        if duplicate is not None:
-            return duplicate
-        require_learning_active(session)
-        if _turn_is_stale(request, session):
-            return _stale_turn_response(session)
-        require_teach_back_recovered(session)
-        content = session.teach_back_content
-        if (session.current_phase != "TEACH_BACK" or content is None
-                or result.teach_back_id != content.teach_back_id
-                or result.micro_skill_id != content.state.current_micro_skill_id):
-            raise HTTPException(status_code=409, detail="Realtime result belongs to an inactive Teach-Back target.")
-        validate_teach_back_content(content)
-        student_input = request.voice_transcript if request.input_source == "VOICE" else request.text_input
-        if student_input is None:
-            raise HTTPException(status_code=422, detail="A final student transcript or text is required.")
-        reply = teach_back_input_reply(student_input, request.input_source, request.transcript_confidence)
-        if reply is None:
-            evidence = result.reply.student_evidence
-            if result.reply.evaluation.understanding_status is not None:
-                claim = evidence.strip().strip('"“”') if evidence is not None else ""
-                if not claim or claim.casefold() not in student_input.casefold():
-                    logger.warning("teach_back_student_evidence_rejected", extra={
-                        "session_id": session.session_id, "micro_skill_id": result.micro_skill_id,
-                        "turn_id": request.turn_id, "teach_back_id": content.teach_back_id,
-                        "student_evidence": evidence, "student_input": student_input,
-                    })
-                    raise HTTPException(status_code=422, detail={"code": "INVALID_TEACH_BACK_REPLY",
-                                        "message": load_teach_back_config().invalid_student_evidence_message})
-            elif evidence is not None:
-                raise HTTPException(status_code=422, detail={"code": "INVALID_TEACH_BACK_REPLY",
-                                    "message": "Only a graded verdict can include current-target student evidence."})
-            reply = result.reply
-            _validate_teach_back_turn_reply(request, content, reply)
-            verified = await asyncio.to_thread(evaluate_teach_back_answer, content, student_input)
-            if (reply.evaluation.understanding_status != verified.understanding_status
-                    or reply.evaluation.error_code != verified.error_code):
-                logger.warning("teach_back_live_evaluation_rejected", extra={
-                    "session_id": session.session_id, "turn_id": request.turn_id,
-                    "micro_skill_id": result.micro_skill_id, "proposed_evaluation": reply.evaluation.model_dump(),
-                    "verified_evaluation": verified.model_dump(),
-                })
-                raise HTTPException(status_code=422, detail={"code": "INVALID_TEACH_BACK_REPLY",
-                    "message": f"Backend checked the latest transcript against the current target. Use this verified evaluation: {verified.model_dump_json()} and next_action={teach_back_action(content, verified.understanding_status)}. Choose student_evidence=null for a null verdict; do not reopen or credit a completed concept."})
-            logger.info("teach_back_live_evaluation_verified", extra={
-                "session_id": session.session_id, "turn_id": request.turn_id,
-                "micro_skill_id": result.micro_skill_id, "understanding_status": verified.understanding_status,
-                "error_code": verified.error_code, "next_action": reply.next_action,
-                "completed_micro_skill_ids": content.state.completed_micro_skill_ids,
-            })
-            reply = reply.model_copy(update={"evaluation": verified})
-        try:
-            return await _record_teach_back_reply(request, session, access_token, reply)
-        except JourneyVersionConflict as conflict:
-            await reconcile_journey_conflict(request.session_id, request.student_id, conflict)
-            raise
 
 
 async def _refresh_teach_back_conflict(session: SessionRecord, access_token: str) -> None:

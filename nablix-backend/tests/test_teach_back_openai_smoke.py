@@ -10,7 +10,7 @@ from pydantic import TypeAdapter
 from typing_extensions import TypedDict
 
 from app.ai_engine.classifier import build_openai_ai_engine_client
-from app.ai_engine.teach_back import build_teach_back_context, generate_teach_back_reply, validate_teach_back_reply
+from app.ai_engine.teach_back import load_teach_back_config, build_teach_back_context, generate_teach_back_reply, validate_teach_back_reply
 from app.core.config import Settings
 from app.models.teach_back import TeachBackPayload, TeachBackReply
 from app.models.adapters import ConversationMessage
@@ -69,7 +69,7 @@ def test_live_teach_back_navigation_is_not_evidence(message: str, monkeypatch: p
     reply = generate_teach_back_reply(content, message, "VOICE", 0.95, history)
     assert reply.evaluation.understanding_status is None, reply.model_dump()
     context = build_teach_back_context(content, message, "VOICE", 0.95)
-    model_reply = engine.generate_teach_back(context, reply.model_json_schema(), history)
+    model_reply = engine.generate_teach_back(context, reply.model_json_schema(), history, load_teach_back_config().reasoning_effort)
     parsed = type(reply).model_validate(model_reply)
     validate_teach_back_reply(content, parsed)
     assert parsed.evaluation.understanding_status is None, parsed.model_dump()

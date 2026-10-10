@@ -196,8 +196,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     first_error: dict[str, object] = errors[0] if len(errors) > 0 else {}
     field: str | None = _validation_field(first_error)
     error_code: str = _validation_error_code(first_error, field)
-    if request.url.path == "/voice/teach-back/result" and first_error.get("loc", ())[:2] == ("body", "reply"):
-        return _error_response(request, 422, "INVALID_TEACH_BACK_REPLY", str(first_error.get("msg", "Invalid Realtime reply.")), field)
     return _error_response(
         request,
         422,

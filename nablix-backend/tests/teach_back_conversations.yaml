@@ -18,3 +18,8 @@ two_genuine_misconceptions:
     - ["The starting number always stays fixed, and the operation changes each time.", MISCONCEPTION, T02.M1]
     - ["Why are we comparing the starting numbers?", null, T02.M1]
     - ["I still think the starting number always stays fixed, and the operation changes each time.", MISCONCEPTION, T02.M1]
+reported_informal_wording:
+  final_phase: GUIDED_PRACTICE
+  turns:
+    - ["So, the starting number n changes and the part that stays fixed is the operation that is addition and four, the ending number.", UNDERSTOOD, T02.M1]
+    - ["N represents the starting number that changes, so I write n plus four.", UNDERSTOOD, T02.M2]

@@ -3,6 +3,7 @@ import base64
 import json
 import math
 import os
+import re
 from copy import deepcopy
 
 import pytest
@@ -15,16 +16,15 @@ from app.adapters.tutor_engine import TutorEngineServiceAdapter
 from app.core.exceptions import AdapterError, JourneyVersionConflict
 from app.models.adapters import ConversationMessage
 from app.models.teach_back import TeachBackEvaluation, TeachBackPayload, TeachBackReply
-from app.models.teach_back_realtime import TeachBackRealtimeReply
 from app.services import interaction_service
-from app.ai_engine.teach_back import evaluate_teach_back_answer, load_teach_back_config, teach_back_action
+from app.ai_engine.teach_back import load_teach_back_config, teach_back_action
 from app.ai_engine.prompt_registry import get_phase_block, load_prompt_registry
 from app.adapters import provider, student_model
 from app.core.config import Settings
 from app.main import app
 from app.models.interaction import InteractionRequest
 from app.models.session import SessionRecord
-from app.services import session_service
+from app.services import session_service, teach_back_realtime
 from tests.test_session_events import _event_response
 from tests.test_teach_back_engine import teach_back_content
 from tests.test_teach_back_openai_smoke import CURIOUS_STUDENT_TURNS, CURIOUS_STUDENT_CASE, TEACH_BACK_CONVERSATIONS, TeachBackConversationCase, assert_curiosity_without_grading, assert_question_answered, repeated_structure_content
@@ -149,14 +149,6 @@ def upstream(monkeypatch: pytest.MonkeyPatch, teach_session: tuple[str, list[dic
 
     monkeypatch.setattr(interaction_service, "_canvas_evidence_for", forbidden_canvas)
     monkeypatch.setattr(TutorEngineServiceAdapter, "respond_to_teach_back", tutor)
-    def evaluate(content: TeachBackPayload, student_input: str) -> TeachBackEvaluation:
-        control["engine_calls"] += 1
-        verdict = None if student_input == "Why?" else "MISCONCEPTION" if student_input == "An object" else "UNDERSTOOD"
-        return TeachBackEvaluation(understanding_status=verdict, misconception_detected=verdict == "MISCONCEPTION",
-                                   error_code="ERR-LETTER" if verdict == "MISCONCEPTION" else None,
-                                   unmapped_misconception_description=None)
-
-    monkeypatch.setattr(interaction_service, "evaluate_teach_back_answer", evaluate)
     monkeypatch.setattr(student_model, "post_json", post)
     return control
 
@@ -385,333 +377,6 @@ def test_orientation_waits_for_second_failure_receipt(upstream: dict[str, object
     assert upstream["engine_calls"] == 2
 
 
-def realtime_result(session_id: str, turn: str, message: str, verdict: str | None) -> dict[str, object]:
-    content = session_service._sessions[session_id].teach_back_content
-    assert content is not None
-    action = teach_back_action(content, verdict)
-    response_text = "I follow that a letter represents a number." if action in {"MOVE_TO_PHASE_2", "RETURN_TO_ORIENTATION"} else "I follow that a letter represents a number. Can you explain that?"
-    return {
-        "interaction": {**submission(session_id, turn, message, "VOICE", "TEACH_BACK_SUBMISSION"), "question_id": None},
-        "teach_back_id": content.teach_back_id,
-        "micro_skill_id": content.state.current_micro_skill_id,
-        "reply": {
-            "student_evidence": message if verdict is not None else None,
-            "evaluation": {"understanding_status": verdict, "misconception_detected": verdict == "MISCONCEPTION",
-                           "error_code": "ERR-LETTER" if verdict == "MISCONCEPTION" else None,
-                           "unmapped_misconception_description": None},
-            "tutor_message": response_text,
-            "tutor_message_voice": response_text,
-            "next_action": action,
-        },
-    }
-
-
-def live_reply_request(context: dict[str, object], transcript: str, validation_error: str | None) -> dict[str, object]:
-    feedback = "" if validation_error is None else f"\nThe previous reply was rejected before progress was saved. Re-evaluate this same transcript and correct response_validation_error: {json.dumps(validation_error)}"
-    return {"type": "response.create", "response": {
-        "conversation": "none", "instructions": str(context["instructions"]) + feedback,
-        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": transcript}]}],
-        "tools": [{"type": "function", "name": context["tool_name"], "description": context["tool_description"], "parameters": context["tool_parameters"]}],
-        "tool_choice": {"type": "function", "name": context["tool_name"]},
-    }}
-
-
-def test_realtime_and_standard_share_progress_and_completion(upstream: dict[str, object]) -> None:
-    session_id = upstream["session_id"]
-    first = client.post("/voice/teach-back/result", json=realtime_result(session_id, "TURN-001", "A number", "UNDERSTOOD"))
-    assert first.status_code == 200, first.text
-    assert upstream["engine_calls"] == 1
-    context = client.post("/voice/teach-back/context", json={"session_id": session_id, "student_id": "ST001"})
-    assert context.status_code == 200, context.text
-    assert context.json()["micro_skill_id"] == "T02.M2"
-    assert context.json()["instructions"].startswith(load_prompt_registry().layer_1_core)
-    assert get_phase_block("TEACH_BACK") in context.json()["instructions"]
-    second = client.post("/interaction", json={**submission(session_id, "TURN-002", "A number", "TEXT", "TEACH_BACK_SUBMISSION"), "question_id": None})
-    assert second.status_code == 200, second.text
-    assert second.json()["current_phase"] == "GUIDED_PRACTICE"
-    assert upstream["engine_calls"] == 2
-    assert [event["event_type"] for event in upstream["events"]][-2:] == ["TEACH_BACK_TURN_RECORDED", "TEACH_BACK_COMPLETED"]
-
-
-def test_realtime_preserves_failure_limit_and_discussion(upstream: dict[str, object]) -> None:
-    session_id = upstream["session_id"]
-    for turn, message, verdict in (("TURN-001", "An object", "MISCONCEPTION"),
-                                   ("TURN-002", "Why?", None),
-                                   ("TURN-003", "An object", "MISCONCEPTION")):
-        response = client.post("/voice/teach-back/result", json=realtime_result(session_id, turn, message, verdict))
-        assert response.status_code == 200, response.text
-    assert response.json()["current_phase"] == "CONCEPT_ORIENTATION"
-    assert session_service._sessions[session_id].teach_back_content.state.failed_explanation_count == 2
-    assert upstream["engine_calls"] == 3
-
-
-@pytest.mark.parametrize("message,confidence", [("next tell me", 0.9), ("I'm ready for the next one", 0.9), ("okay next please", 0.9), ("okay", 0.9), ("Unclear", 0.1), ("", None)])
-def test_realtime_input_checks_override_claimed_understanding(upstream: dict[str, object], message: str, confidence: float | None) -> None:
-    session_id = upstream["session_id"]
-    result = realtime_result(session_id, "TURN-001", message, "UNDERSTOOD")
-    result["interaction"]["transcript_confidence"] = confidence
-    response = client.post("/voice/teach-back/result", json=result)
-    assert response.status_code == 200, response.text
-    state = session_service._sessions[session_id].teach_back_content.state
-    assert state.failed_explanation_count == 0 and state.completed_micro_skill_ids == []
-    assert upstream["engine_calls"] == 0
-
-
-@pytest.mark.parametrize("field,value", [("next_action", "MOVE_TO_PHASE_2"), ("tutor_message_voice", "T02.M1 is understood"),
-                                          ("tutor_message", "Why? Can you explain?")])
-def test_realtime_rejects_rule_breaking_replies(upstream: dict[str, object], field: str, value: str) -> None:
-    session_id = upstream["session_id"]
-    result = realtime_result(session_id, "TURN-001", "A number", "UNDERSTOOD")
-    result["reply"][field] = value
-    response = client.post("/voice/teach-back/result", json=result)
-    assert response.status_code == 422, response.text
-    assert session_service._sessions[session_id].teach_back_content.state.completed_micro_skill_ids == []
-    assert upstream["engine_calls"] == 0
-
-
-@pytest.mark.parametrize("evidence", [None, "", "The letter names an object."])
-@pytest.mark.parametrize("verdict", ["UNDERSTOOD", "MISCONCEPTION"])
-def test_realtime_rejects_invented_or_previous_student_claims(upstream: dict[str, object], evidence: str | None, verdict: str) -> None:
-    session_id = upstream["session_id"]
-    result = realtime_result(session_id, "TURN-EVIDENCE", "I follow that a letter represents a number.", verdict)
-    result["reply"]["student_evidence"] = evidence
-    before = deepcopy(upstream["events"])
-    rejected = client.post("/voice/teach-back/result", json=result)
-    assert rejected.status_code == 422
-    assert rejected.json()["error_code"] == "INVALID_TEACH_BACK_REPLY"
-    assert upstream["events"] == before
-    assert session_service._sessions[session_id].teach_back_content.state.failed_explanation_count == 0
-    corrected = realtime_result(session_id, "TURN-EVIDENCE", "I follow that a letter represents a number.", "UNDERSTOOD")
-    assert client.post("/voice/teach-back/result", json=corrected).status_code == 200
-
-
-def test_realtime_verbatim_spoken_maths_retry_preserves_progress(upstream: dict[str, object]) -> None:
-    session_id = upstream["session_id"]
-    content = repeated_structure_content()
-    content = content.model_copy(update={"state": content.state.model_copy(update={"status": "IN_PROGRESS"})})
-    upstream["content"].update(content.model_dump())
-    session = session_service._sessions[session_id]
-    session_service._sessions[session_id] = session.model_copy(update={"teach_back_content": content})
-    transcript = "Right, so in n plus 4, so the repeated part is plus 4, the part that stays the same always, and n is the part that changes. So n can be any value such as 2, so 2 plus 4. If it's n is 3, then it's 3 plus 4, etc."
-    result = realtime_result(session_id, "TURN-SPOKEN-MATHS", transcript, "UNDERSTOOD")
-    result["reply"]["student_evidence"] = "the repeated part is +4, the part that stays the same always, and n is the part that changes"
-    before = deepcopy(upstream["events"])
-    rejected = client.post("/voice/teach-back/result", json=result)
-    assert rejected.status_code == 422, rejected.text
-    assert rejected.json()["message"] == load_teach_back_config().invalid_student_evidence_message
-    assert upstream["events"] == before and upstream["engine_calls"] == 0
-    assert session_service._sessions[session_id].teach_back_content.state == content.state
-    result["reply"]["student_evidence"] = "the repeated part is plus 4, the part that stays the same always, and n is the part that changes."
-    accepted = client.post("/voice/teach-back/result", json=result)
-    assert accepted.status_code == 200, accepted.text
-    assert session_service._sessions[session_id].teach_back_content.state.completed_micro_skill_ids == ["T02.M1"]
-    assert upstream["engine_calls"] == 1
-    count = len(upstream["events"])
-    assert client.post("/voice/teach-back/result", json=result).status_code == 200
-    assert len(upstream["events"]) == count and upstream["engine_calls"] == 1
-
-
-def test_realtime_refresh_closes_confirmed_skills_and_changes_catalogue(upstream: dict[str, object]) -> None:
-    session_id = upstream["session_id"]
-    content = repeated_structure_content()
-    content = content.model_copy(update={"state": content.state.model_copy(update={"status": "IN_PROGRESS"})})
-    upstream["content"].update(content.model_dump())
-    session = session_service._sessions[session_id]
-    session_service._sessions[session_id] = session.model_copy(update={"teach_back_content": content})
-    request = {"session_id": session_id, "student_id": "ST001"}
-    first = client.post("/voice/teach-back/context", json=request)
-    assert first.status_code == 200
-    first_schema = first.json()["tool_parameters"]
-    assert first_schema["properties"]["student_evidence"]["description"] == load_teach_back_config().realtime.student_evidence_description
-    assert first_schema["$defs"]["TeachBackEvaluation"]["properties"]["error_code"]["enum"] == [None, "ERR-FIXED"]
-    assert "NEXT_MICRO_SKILL" in first_schema["properties"]["next_action"]["enum"]
-    accepted = realtime_result(session_id, "TURN-FIRST", "The starting number changes; adding four stays fixed.", "UNDERSTOOD")
-    assert client.post("/voice/teach-back/result", json=accepted).status_code == 200
-    second = client.post("/voice/teach-back/context", json=request)
-    assert second.status_code == 200
-    assert second.json()["micro_skill_id"] == "T02.M2"
-    schema = second.json()["tool_parameters"]
-    assert schema["$defs"]["TeachBackEvaluation"]["properties"]["error_code"]["enum"] == [None, "ERR-LETTER"]
-    assert "NEXT_MICRO_SKILL" not in schema["properties"]["next_action"]["enum"]
-    assert "MOVE_TO_PHASE_2" in schema["properties"]["next_action"]["enum"]
-    stale = {**accepted, "interaction": {**accepted["interaction"], "turn_id": "TURN-REOPEN"}}
-    before = deepcopy(upstream["events"])
-    assert client.post("/voice/teach-back/result", json=stale).status_code == 409
-    wrong_code = realtime_result(session_id, "TURN-WRONG-CODE", "N is an object.", "MISCONCEPTION")
-    wrong_code["reply"]["evaluation"]["error_code"] = "ERR-FIXED"
-    rejected = client.post("/voice/teach-back/result", json=wrong_code)
-    assert rejected.status_code == 422
-    assert rejected.json()["error_code"] == "INVALID_TEACH_BACK_REPLY"
-    assert upstream["events"] == before
-    assert session_service._sessions[session_id].teach_back_content.state.completed_micro_skill_ids == ["T02.M1"]
-
-
-def test_realtime_malformed_evaluation_is_retryable_before_recording(upstream: dict[str, object]) -> None:
-    result = realtime_result(upstream["session_id"], "TURN-MALFORMED", "An object", "MISCONCEPTION")
-    result["reply"]["evaluation"]["error_code"] = None
-    before = deepcopy(upstream["events"])
-    rejected = client.post("/voice/teach-back/result", json=result)
-    assert rejected.status_code == 422
-    assert rejected.json()["error_code"] == "INVALID_TEACH_BACK_REPLY"
-    assert upstream["events"] == before
-
-
-@pytest.mark.parametrize("message,proposed,verified", [("Why?", "UNDERSTOOD", None), ("A number", "MISCONCEPTION", "UNDERSTOOD")])
-def test_realtime_backend_checks_claims_before_progress(upstream: dict[str, object], message: str, proposed: str, verified: str | None) -> None:
-    session_id = upstream["session_id"]
-    result = realtime_result(session_id, "TURN-VERIFY", message, proposed)
-    before = deepcopy(upstream["events"])
-    rejected = client.post("/voice/teach-back/result", json=result)
-    assert rejected.status_code == 422
-    assert rejected.json()["error_code"] == "INVALID_TEACH_BACK_REPLY"
-    assert "verified evaluation" in rejected.json()["message"]
-    assert upstream["events"] == before
-    assert upstream["engine_calls"] == 1
-    assert session_service._sessions[session_id].teach_back_content.state.failed_explanation_count == 0
-    corrected = realtime_result(session_id, "TURN-VERIFY", message, verified)
-    assert client.post("/voice/teach-back/result", json=corrected).status_code == 200
-    assert session_service._sessions[session_id].teach_back_content.state.completed_micro_skill_ids == ([] if verified is None else ["T02.M1"])
-
-
-@pytest.mark.parametrize("wording", [
-    "I'm not sure what you mean there. Could you explain the letter to me?",
-    "Can you teach me what the letter represents?",
-])
-def test_realtime_clear_question_retries_without_saving_unclear_reply(upstream: dict[str, object], wording: str) -> None:
-    session_id = upstream["session_id"]
-    result = realtime_result(session_id, "TURN-QUESTION", "Why?", None)
-    result["reply"] = {**result["reply"], "tutor_message": wording, "tutor_message_voice": wording}
-    before = deepcopy(upstream["events"])
-    rejected = client.post("/voice/teach-back/result", json=result)
-    assert rejected.status_code == 422
-    assert rejected.json()["error_code"] == "INVALID_TEACH_BACK_REPLY"
-    assert upstream["events"] == before
-    assert upstream["engine_calls"] == 0
-    corrected = realtime_result(session_id, "TURN-QUESTION", "Why?", None)
-    assert client.post("/voice/teach-back/result", json=corrected).status_code == 200
-    state = session_service._sessions[session_id].teach_back_content.state
-    assert state.failed_explanation_count == 0 and state.completed_micro_skill_ids == []
-
-
-def test_realtime_lost_ack_recovers_and_duplicate_does_not_record_twice(upstream: dict[str, object]) -> None:
-    session_id = upstream["session_id"]
-    result = realtime_result(session_id, "TURN-001", "A number", "UNDERSTOOD")
-    upstream["fail_record"] = True
-    failed = client.post("/voice/teach-back/result", json=result)
-    assert failed.status_code == 503, failed.text
-    assert client.get(f"/session/{session_id}", params={"student_id": "ST001"}).status_code == 200
-    duplicate = client.post("/voice/teach-back/result", json=result)
-    assert duplicate.status_code == 200, duplicate.text
-    assert duplicate.json()["status"] == "DUPLICATE_TURN"
-    assert session_service._sessions[session_id].teach_back_content.state.completed_micro_skill_ids == ["T02.M1"]
-    assert upstream["engine_calls"] == 1
-
-
-def test_realtime_rejects_stale_target_canvas_and_unauthenticated_calls(upstream: dict[str, object]) -> None:
-    session_id = upstream["session_id"]
-    result = realtime_result(session_id, "TURN-001", "A number", "UNDERSTOOD")
-    anonymous = TestClient(app).post("/voice/teach-back/result", json=result)
-    assert anonymous.status_code == 401
-    stale = client.post("/voice/teach-back/result", json={**result, "micro_skill_id": "T02.M2"})
-    assert stale.status_code == 409
-    result["interaction"]["canvas_snapshot_id"] = "SNAP-001"
-    assert client.post("/voice/teach-back/result", json=result).status_code == 422
-    assert upstream["engine_calls"] == 0
-
-
-def use_real_teach_back_grading(upstream: dict[str, object], monkeypatch: pytest.MonkeyPatch, key: str) -> None:
-    monkeypatch.setattr("app.ai_engine.teach_back.get_settings", lambda: Settings(use_openai_ai_engine=True, openai_api_key=key))
-
-    def evaluate(content: TeachBackPayload, student_input: str) -> TeachBackEvaluation:
-        upstream["engine_calls"] += 1
-        return evaluate_teach_back_answer(content, student_input)
-
-    monkeypatch.setattr(interaction_service, "evaluate_teach_back_answer", evaluate)
-
-
-@pytest.mark.parametrize("message,verdict", [
-    ("A letter stands for a number we do not know yet.", "UNDERSTOOD"),
-    ("Next tell me.", None),
-    ("Why do we use a letter instead of a number?", None),
-    ("The letter is the name of an object, like apples.", "MISCONCEPTION"),
-])
-def test_live_realtime_teach_back_tool(upstream: dict[str, object], monkeypatch: pytest.MonkeyPatch,
-                                     message: str, verdict: str | None) -> None:
-    if os.getenv("NABLIX_RUN_REALTIME_SMOKE") != "true":
-        pytest.skip("Set NABLIX_RUN_REALTIME_SMOKE=true to run the billed Realtime smoke check.")
-    key = os.getenv("NABLIX_OPENAI_API_KEY")
-    if not key:
-        pytest.fail("NABLIX_OPENAI_API_KEY is required for the live Realtime smoke check.")
-    monkeypatch.setattr("app.services.teach_back_realtime.get_settings", lambda: Settings(openai_api_key=key))
-    use_real_teach_back_grading(upstream, monkeypatch, key)
-    session_id = upstream["session_id"]
-
-    async def evaluate() -> tuple[str, float, TeachBackRealtimeReply]:
-        # Use the same configured model and short-lived credential as the browser.
-        model = load_teach_back_config().realtime.model
-        async with AsyncOpenAI(api_key=key) as audio_client:
-            audio = await audio_client.audio.speech.create(
-                model="gpt-4o-mini-tts", voice="alloy", input=message, response_format="pcm",
-            )
-        started = client.post("/voice/teach-back/session", json={"session_id": session_id, "student_id": "ST001"})
-        assert started.status_code == 200, started.text
-        secret = started.json()["client_secret"]
-        context = started.json()["context"]
-        transcript: str | None = None
-        confidence: float | None = None
-        reply: TeachBackRealtimeReply | None = None
-        async with connect(f"wss://api.openai.com/v1/realtime?model={model}",
-                           extra_headers={"Authorization": f"Bearer {secret}"}, open_timeout=20) as connection:
-            await connection.send(json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(audio.content).decode("ascii")}))
-            await connection.send(json.dumps({"type": "input_audio_buffer.commit"}))
-            with fail_after(started.json()["response_timeout_seconds"]):
-                async for raw in connection:
-                    event = json.loads(raw)
-                    if event["type"] == "error":
-                        raise RuntimeError(f"Realtime rejected transcription: {event['error']}")
-                    if event["type"] == "conversation.item.input_audio_transcription.completed":
-                        transcript = event["transcript"]
-                        probabilities = event["logprobs"]
-                        assert probabilities
-                        confidence = math.exp(sum(entry["logprob"] for entry in probabilities) / len(probabilities))
-                        break
-            assert transcript is not None and confidence is not None
-            validation_error: str | None = None
-            for attempt in range(started.json()["request_retry_count"] + 1):
-                arguments: dict[str, object] | None = None
-                await connection.send(json.dumps(live_reply_request(context, transcript, validation_error)))
-                with fail_after(started.json()["response_timeout_seconds"]):
-                    async for raw in connection:
-                        event = json.loads(raw)
-                        if event["type"] == "error":
-                            raise RuntimeError(f"Realtime rejected evaluation: {event['error']}")
-                        if event["type"] == "response.function_call_arguments.done":
-                            assert event["name"] == context["tool_name"]
-                            assert arguments is None
-                            arguments = json.loads(event["arguments"])
-                        if event["type"] == "response.done":
-                            assert event["response"]["status"] == "completed"
-                            print(json.dumps({"realtime_model": model, "usage": event["response"]["usage"]}))
-                            break
-                assert arguments is not None
-                result = realtime_result(session_id, "TURN-001", transcript, verdict)
-                result["reply"] = arguments
-                result["interaction"]["transcript_confidence"] = confidence
-                recorded = client.post("/voice/teach-back/result", json=result)
-                if recorded.status_code == 422 and recorded.json()["error_code"] == "INVALID_TEACH_BACK_REPLY" and attempt < started.json()["request_retry_count"]:
-                    validation_error = recorded.json()["message"]
-                    continue
-                assert recorded.status_code == 200, {"error": recorded.text, "reply": arguments, "transcript": transcript}
-                return transcript, confidence, TeachBackRealtimeReply.model_validate(arguments)
-        raise RuntimeError("Realtime closed without an accepted Teach-Back result.")
-
-    transcript, confidence, reply = asyncio.run(evaluate())
-    assert transcript.strip()
-    assert reply.evaluation.understanding_status == verdict, reply.model_dump()
-    assert session_service._sessions[session_id].teach_back_content.state.completed_micro_skill_ids == (["T02.M1"] if verdict == "UNDERSTOOD" else [])
-    assert upstream["engine_calls"] >= (1 if verdict is not None else 0)
-
-
 def test_disabling_realtime_preserves_standard_teachback(upstream: dict[str, object], monkeypatch: pytest.MonkeyPatch) -> None:
     config = load_teach_back_config()
     disabled = config.model_copy(update={"realtime": config.realtime.model_copy(update={"enabled": False})})
@@ -721,116 +386,125 @@ def test_disabling_realtime_preserves_standard_teachback(upstream: dict[str, obj
     assert client.get("/voice/teach-back/options").json() == {"realtime_enabled": False}
     started = client.post("/voice/teach-back/session", json={"session_id": session_id, "student_id": "ST001"})
     assert started.status_code == 409
-    result = client.post("/voice/teach-back/result", json=realtime_result(session_id, "TURN-001", "A number", "UNDERSTOOD"))
-    assert result.status_code == 409
     standard = client.post("/interaction", json=submission(session_id, "TURN-001", "A number", "TEXT", "TEACH_BACK_SUBMISSION"))
     assert standard.status_code == 200, standard.text
     assert upstream["engine_calls"] == 1
 
 
+REAL_TEACH_BACK_REPLY = TutorEngineServiceAdapter.respond_to_teach_back
 
-@pytest.mark.parametrize("case,rejected_turn", [pytest.param(CURIOUS_STUDENT_CASE, None, id="curiosity"),
-                                               pytest.param(CURIOUS_STUDENT_CASE, 2, id="invented_code"),
-                                               *[pytest.param(case, None, id=name) for name, case in TEACH_BACK_CONVERSATIONS.items()]])
-def test_live_realtime_curious_student_conversation(upstream: dict[str, object], monkeypatch: pytest.MonkeyPatch, case: TeachBackConversationCase, rejected_turn: int | None) -> None:
+
+def test_realtime_session_only_hears_and_speaks(upstream: dict[str, object], monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[dict[str, object]] = []
+
+    async def mint(adapter_name: str, url: str, payload: dict[str, object], headers: dict[str, str], timeout_seconds: int, retry_count: int) -> dict[str, object]:
+        sent.append(payload)
+        return {"value": "ek_test"}
+
+    monkeypatch.setattr(teach_back_realtime, "post_json", mint)
+    monkeypatch.setattr(teach_back_realtime, "get_settings", lambda: Settings(openai_api_key="sk-test"))
+    config = load_teach_back_config().realtime
+    started = client.post("/voice/teach-back/session", json={"session_id": upstream["session_id"], "student_id": "ST001"})
+    assert started.status_code == 200, started.text
+    assert started.json() == {"client_secret": "ek_test", "calls_url": config.calls_url,
+                              "response_timeout_seconds": config.response_timeout_seconds,
+                              "request_retry_count": Settings().adapter_request_retry_count,
+                              "speaker_instructions": config.speaker_instructions}
+    session = sent[0]["session"]
+    assert session["output_modalities"] == ["audio"] and "tools" not in session
+    assert session["audio"]["input"]["turn_detection"] == {**config.turn_detection, "create_response": False, "interrupt_response": False}
+    assert session["audio"]["input"]["transcription"]["model"] == config.transcription_model
+    assert session["audio"]["output"] == {"voice": config.voice}
+    # The voice connection never sees lesson content; the backend grades every transcript.
+    assert "SESSION_CONTEXT" not in json.dumps(sent)
+    assert upstream["engine_calls"] == 0
+
+
+def test_realtime_session_needs_login_and_active_teach_back(upstream: dict[str, object], monkeypatch: pytest.MonkeyPatch) -> None:
+    session_id = upstream["session_id"]
+    monkeypatch.setattr(teach_back_realtime, "get_settings", lambda: Settings(openai_api_key="sk-test"))
+    body = {"session_id": session_id, "student_id": "ST001"}
+    assert TestClient(app).post("/voice/teach-back/session", json=body).status_code == 401
+    session = session_service._sessions[session_id]
+    session_service._sessions[session_id] = session.model_copy(update={"current_phase": "GUIDED_PRACTICE"})
+    assert client.post("/voice/teach-back/session", json=body).status_code == 409
+    assert client.post("/voice/teach-back/result", json={}).status_code == 404
+
+
+def test_live_voice_turn_hears_grades_once_and_speaks(upstream: dict[str, object], monkeypatch: pytest.MonkeyPatch) -> None:
     if os.getenv("NABLIX_RUN_REALTIME_SMOKE") != "true":
-        pytest.skip("Set NABLIX_RUN_REALTIME_SMOKE=true to run the billed Realtime conversation.")
+        pytest.skip("Set NABLIX_RUN_REALTIME_SMOKE=true to run the billed Realtime voice check.")
     key = os.getenv("NABLIX_OPENAI_API_KEY")
     if not key:
-        pytest.fail("NABLIX_OPENAI_API_KEY is required for the live Realtime conversation.")
-    monkeypatch.setattr("app.services.teach_back_realtime.get_settings", lambda: Settings(openai_api_key=key))
-    use_real_teach_back_grading(upstream, monkeypatch, key)
+        pytest.fail("NABLIX_OPENAI_API_KEY is required for the live Realtime voice check.")
+    settings = Settings(use_openai_ai_engine=True, openai_api_key=key)
+    monkeypatch.setattr(teach_back_realtime, "get_settings", lambda: settings)
+    monkeypatch.setattr("app.ai_engine.teach_back.get_settings", lambda: settings)
+    monkeypatch.setattr(TutorEngineServiceAdapter, "respond_to_teach_back", REAL_TEACH_BACK_REPLY)
     session_id = upstream["session_id"]
     content = repeated_structure_content()
     content = content.model_copy(update={"state": content.state.model_copy(update={"status": "IN_PROGRESS"})})
     upstream["content"].update(content.model_dump())
     session = session_service._sessions[session_id]
     session_service._sessions[session_id] = session.model_copy(update={"teach_back_content": content, "conversation_history": []})
+    message = "So the starting number n changes, and the part that stays fixed is the operation, adding four, the ending number."
 
-    async def converse() -> None:
-        recordings: list[bytes] = []
+    async def converse() -> dict[str, float]:
         async with AsyncOpenAI(api_key=key) as audio_client:
-            for message, _, _ in case["turns"]:
-                audio = await audio_client.audio.speech.create(
-                    model="gpt-4o-mini-tts", voice="alloy", input=message, response_format="pcm",
-                )
-                recordings.append(audio.content)
+            audio = await audio_client.audio.speech.create(model="gpt-4o-mini-tts", voice="alloy", input=message, response_format="pcm")
         started = client.post("/voice/teach-back/session", json={"session_id": session_id, "student_id": "ST001"})
         assert started.status_code == 200, started.text
-        context = started.json()["context"]
-        model = load_teach_back_config().realtime.model
-        async with connect(f"wss://api.openai.com/v1/realtime?model={model}",
+        timeout = started.json()["response_timeout_seconds"]
+        timings: dict[str, float] = {}
+        async with connect(f"wss://api.openai.com/v1/realtime?model={load_teach_back_config().realtime.model}",
                            extra_headers={"Authorization": f"Bearer {started.json()['client_secret']}"}, open_timeout=20) as connection:
-            for index, ((message, verdict, current), audio) in enumerate(zip(case["turns"], recordings, strict=True)):
-                assert context["micro_skill_id"] == current
-                supplied = json.loads(context["instructions"].split("<SESSION_CONTEXT>\n", 1)[1].split("\n</SESSION_CONTEXT>", 1)[0])
-                expected_action = "NEXT_MICRO_SKILL" if current == "T02.M1" else "MOVE_TO_PHASE_2"
-                assert supplied["required_actions"]["UNDERSTOOD"] == expected_action
-                transcript: str | None = None
-                confidence: float | None = None
-                await connection.send(json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(audio).decode("ascii")}))
-                await connection.send(json.dumps({"type": "input_audio_buffer.commit"}))
-                with fail_after(started.json()["response_timeout_seconds"]):
-                    async for raw in connection:
-                        event = json.loads(raw)
-                        if event["type"] == "error":
-                            raise RuntimeError(f"Realtime rejected transcription: {event['error']}")
-                        if event["type"] == "conversation.item.input_audio_transcription.completed":
-                            transcript = event["transcript"]
-                            probabilities = event["logprobs"]
-                            assert probabilities
-                            confidence = math.exp(sum(entry["logprob"] for entry in probabilities) / len(probabilities))
-                            break
-                assert transcript is not None and confidence is not None
-                validation_error: str | None = None
-                for attempt in range(started.json()["request_retry_count"] + 1):
-                    arguments: dict[str, object] | None = None
-                    await connection.send(json.dumps(live_reply_request(context, transcript, validation_error)))
-                    with fail_after(started.json()["response_timeout_seconds"]):
-                        async for raw in connection:
-                            event = json.loads(raw)
-                            if event["type"] == "error":
-                                raise RuntimeError(f"Realtime rejected evaluation: {event['error']}")
-                            if event["type"] == "response.function_call_arguments.done":
-                                assert event["name"] == context["tool_name"]
-                                assert arguments is None
-                                arguments = json.loads(event["arguments"])
-                            if event["type"] == "response.done":
-                                assert event["response"]["status"] == "completed"
-                                print(json.dumps({"realtime_model": model, "usage": event["response"]["usage"]}))
-                                break
-                    assert arguments is not None
-                    if index == rejected_turn and attempt == 0:
-                        arguments = {**arguments, "evaluation": {**arguments["evaluation"], "error_code": "ERR-INVENTED"}}
-                    print(json.dumps({"skill": current, "attempt": attempt, "student": transcript, "reply": arguments}, ensure_ascii=False))
-                    result = realtime_result(session_id, f"TURN-CURIOUS-{index}", transcript, verdict)
-                    result["reply"] = arguments
-                    result["interaction"]["transcript_confidence"] = confidence
-                    recorded = client.post("/voice/teach-back/result", json=result)
-                    if recorded.status_code == 422 and recorded.json()["error_code"] == "INVALID_TEACH_BACK_REPLY" and attempt < started.json()["request_retry_count"]:
-                        if index == rejected_turn and attempt == 0:
-                            assert session_service._sessions[session_id].teach_back_content.state.failed_explanation_count == 0
-                        validation_error = recorded.json()["message"]
-                        refreshed = client.post("/voice/teach-back/context", json={"session_id": session_id, "student_id": "ST001"})
-                        assert refreshed.status_code == 200, refreshed.text
-                        context = refreshed.json()
-                        assert context["micro_skill_id"] == current
-                        continue
-                    assert recorded.status_code == 200, {"error": recorded.text, "reply": arguments}
-                    reply = TeachBackRealtimeReply.model_validate(arguments)
-                    assert reply.evaluation.understanding_status == verdict, reply.model_dump()
-                    assert_curiosity_without_grading(reply)
-                    assert_question_answered(message, reply)
-                    break
-                if index < len(case["turns"]) - 1:
-                    refreshed = client.post("/voice/teach-back/context", json={"session_id": session_id, "student_id": "ST001"})
-                    assert refreshed.status_code == 200, refreshed.text
-                    context = refreshed.json()
-    asyncio.run(converse())
-    assert session_service._sessions[session_id].current_phase == case["final_phase"]
-    if case["final_phase"] == "GUIDED_PRACTICE":
-        assert [event["event_type"] for event in upstream["events"]][-2:] == ["TEACH_BACK_TURN_RECORDED", "TEACH_BACK_COMPLETED"]
-    else:
-        assert session_service._sessions[session_id].teach_back_content.state.failed_explanation_count == 2
-        assert session_service._sessions[session_id].teach_back_content.state.completed_micro_skill_ids == []
-    assert upstream["engine_calls"] >= 2
+            # Trailing silence lets the configured turn detection end the turn by itself, as in the browser.
+            silence = bytes(24_000 * 2 * 3)
+            await connection.send(json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(audio.content + silence).decode("ascii")}))
+            sent_at = asyncio.get_running_loop().time()
+            transcript, confidence = "", 0.0
+            with fail_after(timeout):
+                async for raw in connection:
+                    event = json.loads(raw)
+                    if event["type"] == "error":
+                        raise RuntimeError(f"Realtime rejected the student audio: {event['error']}")
+                    assert not event["type"].startswith("response."), "The voice answered on its own."
+                    if event["type"] == "conversation.item.input_audio_transcription.completed":
+                        transcript = event["transcript"]
+                        confidence = math.exp(sum(entry["logprob"] for entry in event["logprobs"]) / len(event["logprobs"]))
+                        break
+            timings["heard_seconds"] = asyncio.get_running_loop().time() - sent_at
+            graded_at = asyncio.get_running_loop().time()
+            payload = {**submission(session_id, "TURN-LIVE-VOICE", transcript, "VOICE", "TEACH_BACK_SUBMISSION"),
+                       "question_id": None, "transcript_confidence": confidence}
+            graded = await asyncio.to_thread(client.post, "/interaction", json=payload)
+            assert graded.status_code == 200, graded.text
+            timings["graded_seconds"] = asyncio.get_running_loop().time() - graded_at
+            reply = graded.json()["message_voice"] or graded.json()["message"]
+            spoken_at = asyncio.get_running_loop().time()
+            await connection.send(json.dumps({"type": "response.create", "response": {
+                "conversation": "none", "output_modalities": ["audio"], "input": [],
+                "instructions": f"{started.json()['speaker_instructions']}\n<say>{reply}</say>",
+            }}))
+            spoken = ""
+            with fail_after(timeout):
+                async for raw in connection:
+                    event = json.loads(raw)
+                    if event["type"] == "error":
+                        raise RuntimeError(f"Realtime could not speak the reply: {event['error']}")
+                    if event["type"] == "response.output_audio.delta" and "first_audio_seconds" not in timings:
+                        timings["first_audio_seconds"] = asyncio.get_running_loop().time() - spoken_at
+                    if event["type"] == "response.output_audio_transcript.done":
+                        spoken = event["transcript"]
+                    if event["type"] == "response.done":
+                        assert event["response"]["status"] == "completed", event
+                        break
+            said = set(re.findall(r"[a-z0-9]+", reply.lower()))
+            heard = set(re.findall(r"[a-z0-9]+", spoken.lower()))
+            assert len(said & heard) >= 0.8 * len(said), {"reply": reply, "spoken": spoken}
+            print(json.dumps({"student": transcript, "tutor": reply, "spoken": spoken, **timings}, ensure_ascii=False))
+        return timings
+
+    timings = asyncio.run(converse())
+    assert session_service._sessions[session_id].teach_back_content.state.completed_micro_skill_ids == ["T02.M1"]
+    assert timings["first_audio_seconds"] < 5
