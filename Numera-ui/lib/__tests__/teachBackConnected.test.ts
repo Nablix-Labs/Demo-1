@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AxiosError, AxiosHeaders } from 'axios';
 import {
-  restoredLines, teachBackFailure, teachBackFailureMessage, teachBackPayload,
+  restoredLines, sendWithOneResend, teachBackFailure, teachBackFailureMessage, teachBackPayload,
 } from '@/lib/teachback/connected';
 
 const session = {
@@ -65,28 +65,71 @@ describe('restoredLines', () => {
 });
 
 describe('teachBackFailure', () => {
+  // The backend's real error body (nablix-backend main.py _error_response).
+  const body = (message: string, error_code = 'HTTP_ERROR') => ({ error_code, message, field: null, timestamp: 't', request_id: 'r' });
+
   it('retries what may not have been saved', () => {
     expect(teachBackFailure(axiosError(undefined))).toBe('retry'); // network / timeout
-    expect(teachBackFailure(axiosError(503, { detail: 'Teach-Back context is unavailable.' }))).toBe('retry');
-    expect(teachBackFailure(axiosError(409, { detail: 'Teach-Back recovery is pending; refresh the session before submitting another turn.' }))).toBe('retry');
-    expect(teachBackFailure(axiosError(409, { error_code: 'JOURNEY_VERSION_CONFLICT' }))).toBe('retry');
+    expect(teachBackFailure(axiosError(503, body('Teach-Back context or student evidence is missing.')))).toBe('retry');
+    expect(teachBackFailure(axiosError(409, body('Teach-Back recovery is pending; refresh the session before submitting another turn.')))).toBe('retry');
+    expect(teachBackFailure(axiosError(409, body('Journey version changed.', 'JOURNEY_VERSION_CONFLICT')))).toBe('retry');
     expect(teachBackFailure(new Error('turn could not be synchronised'))).toBe('retry');
   });
 
+  it('resends when the tutor reply, not the student, failed the backend checks', () => {
+    expect(teachBackFailure(axiosError(422, body('A graded verdict must quote a current-target claim.', 'INVALID_TEACH_BACK_REPLY')))).toBe('retry');
+  });
+
   it('discards what the backend refused for good', () => {
-    expect(teachBackFailure(axiosError(422, { detail: 'canvas is not accepted' }))).toBe('discard');
-    expect(teachBackFailure(axiosError(409, { detail: 'turn_id was already accepted with different Teach-Back evidence.' }))).toBe('discard');
+    expect(teachBackFailure(axiosError(422, body('Realtime results require a text or voice Teach-Back submission without canvas.')))).toBe('discard');
+    expect(teachBackFailure(axiosError(422, body('Field required', 'VALIDATION_ERROR')))).toBe('discard');
+    expect(teachBackFailure(axiosError(409, body('turn_id was already accepted with different Teach-Back evidence.')))).toBe('discard');
+    expect(teachBackFailure(axiosError(409, body('The authoritative session is outside Teach-Back.')))).toBe('discard');
+    expect(teachBackFailure(axiosError(409, body('Realtime result belongs to an inactive Teach-Back target.')))).toBe('discard');
+    expect(teachBackFailure(axiosError(409, body('Teach-Back has no unfinished target.')))).toBe('discard');
+  });
+
+  it('still reads a raw FastAPI detail', () => {
     expect(teachBackFailure(axiosError(409, { detail: 'The authoritative session is outside Teach-Back.' }))).toBe('discard');
-    expect(teachBackFailure(axiosError(409, { detail: 'Realtime result belongs to an inactive Teach-Back target.' }))).toBe('discard');
   });
 
   it('recognises a teacher pause', () => {
-    expect(teachBackFailure(axiosError(409, { error_code: 'INTERVENTION_REQUIRED' }))).toBe('paused');
+    expect(teachBackFailure(axiosError(409, body('paused', 'INTERVENTION_REQUIRED')))).toBe('paused');
   });
 
   it('never shows server text to the student', () => {
     for (const a of ['retry', 'discard', 'paused'] as const) {
       expect(teachBackFailureMessage(a)).not.toMatch(/409|422|503|Teach-Back evidence|status/i);
+    }
+  });
+});
+
+describe('sendWithOneResend', () => {
+  const invalid = () => axiosError(422, { error_code: 'INVALID_TEACH_BACK_REPLY', message: 'bad reply' });
+
+  it('resends once after an invalid tutor reply or a server error, then succeeds', async () => {
+    for (const first of [invalid(), axiosError(503, { error_code: 'HTTP_ERROR', message: 'x' }), axiosError(undefined)]) {
+      let calls = 0;
+      const out = await sendWithOneResend(async () => { calls++; if (calls === 1) throw first; return 'ok'; }, 0);
+      expect(out).toBe('ok');
+      expect(calls).toBe(2);
+    }
+  });
+
+  it('gives up after the second failure', async () => {
+    let calls = 0;
+    await expect(sendWithOneResend(async () => { calls++; throw invalid(); }, 0)).rejects.toBeTruthy();
+    expect(calls).toBe(2);
+  });
+
+  it('never resends a conflict or a refused answer: those refresh first', async () => {
+    for (const err of [
+      axiosError(409, { error_code: 'HTTP_ERROR', message: 'Teach-Back recovery is pending' }),
+      axiosError(422, { error_code: 'VALIDATION_ERROR', message: 'Field required' }),
+    ]) {
+      let calls = 0;
+      await expect(sendWithOneResend(async () => { calls++; throw err; }, 0)).rejects.toBe(err);
+      expect(calls).toBe(1);
     }
   });
 });

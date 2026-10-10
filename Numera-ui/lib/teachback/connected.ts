@@ -92,18 +92,54 @@ export function teachBackFailure(err: unknown): FailureAction {
   if (!axios.isAxiosError(err)) return 'retry';
   const status = err.response?.status;
   if (status === undefined) return 'retry'; // network or timeout
-  const data = err.response?.data as { error_code?: string; detail?: unknown } | undefined;
-  if (status === 409 && data?.error_code === 'INTERVENTION_REQUIRED') return 'paused';
+  // Every backend error arrives flattened to { error_code, message }
+  // (nablix-backend main.py _error_response); `detail` only on a raw FastAPI error.
+  const data = err.response?.data as { error_code?: string; message?: unknown; detail?: unknown } | undefined;
+  const code = data?.error_code;
+  const text = [data?.message, data?.detail].filter((t): t is string => typeof t === 'string').join(' ');
+  if (code === 'INTERVENTION_REQUIRED') return 'paused';
+  // The tutor's reply failed the backend's checks; nothing was recorded, and a
+  // resend asks the AI again. Not the student's fault, so their answer stays.
+  if (code === 'INVALID_TEACH_BACK_REPLY') return 'retry';
   if (status === 422) return 'discard';
   if (status === 409) {
-    const detail = typeof data?.detail === 'string' ? data.detail : '';
     // Same turn_id, different words: the earlier version was kept.
-    if (/different Teach-Back evidence/i.test(detail)) return 'discard';
+    if (/different Teach-Back evidence/i.test(text)) return 'discard';
     // The session has moved on (orientation or guided); routing takes over.
-    if (/outside Teach-Back|inactive Teach-Back target/i.test(detail)) return 'discard';
+    if (/outside Teach-Back|inactive Teach-Back target|no unfinished target/i.test(text)) return 'discard';
     return 'retry'; // recovery pending, version conflict
   }
   return status >= 500 ? 'retry' : 'discard';
+}
+
+/**
+ * May this failure be resent straight away, without a refresh first?
+ *
+ * Only when nothing about the session can have moved: the tutor's reply failed
+ * the backend's checks (nothing recorded), the server errored, or the request
+ * never arrived. A 409 means the session state matters, so it refreshes first.
+ */
+export function resendableNow(err: unknown): boolean {
+  if (!axios.isAxiosError(err)) return false;
+  const status = err.response?.status;
+  if (status === undefined) return true;
+  const code = (err.response?.data as { error_code?: string } | undefined)?.error_code;
+  return code === 'INVALID_TEACH_BACK_REPLY' || status >= 500;
+}
+
+/**
+ * Send once, and if that fails in a resendable way, send the SAME request again
+ * after a pause. The backend dedupes on turn_id + content, so a resend can never
+ * record a turn twice. The student only sees an error if both attempts fail.
+ */
+export async function sendWithOneResend<T>(send: () => Promise<T>, pauseMs = 1200): Promise<T> {
+  try {
+    return await send();
+  } catch (err) {
+    if (!resendableNow(err)) throw err;
+    await new Promise((r) => setTimeout(r, pauseMs));
+    return send();
+  }
 }
 
 /** The words a student sees for a failed turn. Never raw server text. */
