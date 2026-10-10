@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from app.ai_engine.teach_back import evaluate_teach_back_answer, teach_back_action, teach_back_input_reply, validate_teach_back_content, validate_teach_back_reply, validate_teach_back_wording
 from app.models.session import PendingTeachBackOperation, TeachBackReceipt
-from app.models.teach_back import TeachBackReply, TeachBackStoredReply
+from app.models.teach_back import TeachBackPayload, TeachBackReply, TeachBackStoredReply
 from app.models.teach_back_realtime import TeachBackRealtimeResult
 from app.models.student_model_session import TeachBackTurnRecordedEvent, TeachBackCompletedEvent
 from app.services.session_service import store_teach_back_state, require_teach_back_recovered, _schema_request_id, _schema_timestamp
