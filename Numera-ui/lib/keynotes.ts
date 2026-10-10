@@ -107,3 +107,41 @@ export function noteToSpeech(n: KeyNote): string {
     `Exam tip: ${n.examTip}`,
   ].join(' ');
 }
+
+/**
+ * A key note as the backend sends it (master plan §4, Sanya):
+ * GET /students/me/key-notes?session_id= → { notes: ApiKeyNote[] } or ApiKeyNote[].
+ */
+export interface ApiKeyNote {
+  id?: string;
+  topic_code?: string;
+  topic: string;
+  meaning?: string;
+  how_to_start?: string;
+  steps?: string[];
+  be_careful?: string[];
+  tips?: string[];
+  formula?: string;
+  example?: string[];
+  exam_tip?: string;
+  /** Surfaced because of a mistake made in this session. */
+  flagged?: boolean;
+}
+
+/** Map the backend's note onto the notebook's shape; missing parts stay empty. */
+export function keyNoteFromApi(n: ApiKeyNote, index: number): KeyNote {
+  const slug = (n.id || n.topic_code || n.topic || `note-${index}`).toString().trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  return {
+    id: slug || `note-${index}`,
+    topic: n.topic?.trim() || 'Key note',
+    meaning: n.meaning?.trim() ?? '',
+    howToStart: n.how_to_start?.trim() ?? '',
+    steps: (n.steps ?? []).filter(Boolean),
+    beCareful: (n.be_careful ?? []).filter(Boolean),
+    tips: (n.tips ?? []).filter(Boolean),
+    formula: n.formula?.trim() ?? '',
+    example: (n.example ?? []).filter(Boolean),
+    examTip: n.exam_tip?.trim() ?? '',
+    flagged: Boolean(n.flagged),
+  };
+}

@@ -52,9 +52,7 @@ export const STUDENT_ID = 'ST001';
 export function studentId(): string {
   return useAuthStore.getState().studentCode ?? STUDENT_ID;
 }
-export const DEMO_CONCEPT_ID = 'ALG_LINEAR_ONE_STEP';
-export const DEMO_QUESTION_ID = 'ALG_EQ_DIAG_001';
-export const DEMO_PHASE = 'GUIDED_PRACTICE';
+export { DEMO_CONCEPT_ID, DEMO_QUESTION_ID, DEMO_PHASE } from '@/lib/demoIds';
 
 export const api = axios.create({
   baseURL: BASE,

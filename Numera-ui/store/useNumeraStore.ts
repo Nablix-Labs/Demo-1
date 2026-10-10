@@ -14,8 +14,8 @@ import type { FlowStage } from '@/lib/flow';
 import { TOPICS } from '@/lib/topics';
 import { isPhase3 } from '@/lib/phase3';
 import type { GuidedRescuePayload } from '@/lib/guidedRescue';
+import { DEMO_CONCEPT_ID } from '@/lib/demoIds';
 import {
-  DEMO_CONCEPT_ID,
   studentViewFor,
   hasSelectableOptions,
   type ActiveScaffold,
