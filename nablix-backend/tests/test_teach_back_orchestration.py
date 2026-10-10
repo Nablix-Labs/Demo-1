@@ -484,6 +484,32 @@ def test_realtime_rejects_invented_or_previous_student_claims(upstream: dict[str
     assert client.post("/voice/teach-back/result", json=corrected).status_code == 200
 
 
+def test_realtime_verbatim_spoken_maths_retry_preserves_progress(upstream: dict[str, object]) -> None:
+    session_id = upstream["session_id"]
+    content = repeated_structure_content()
+    content = content.model_copy(update={"state": content.state.model_copy(update={"status": "IN_PROGRESS"})})
+    upstream["content"].update(content.model_dump())
+    session = session_service._sessions[session_id]
+    session_service._sessions[session_id] = session.model_copy(update={"teach_back_content": content})
+    transcript = "Right, so in n plus 4, so the repeated part is plus 4, the part that stays the same always, and n is the part that changes. So n can be any value such as 2, so 2 plus 4. If it's n is 3, then it's 3 plus 4, etc."
+    result = realtime_result(session_id, "TURN-SPOKEN-MATHS", transcript, "UNDERSTOOD")
+    result["reply"]["student_evidence"] = "the repeated part is +4, the part that stays the same always, and n is the part that changes"
+    before = deepcopy(upstream["events"])
+    rejected = client.post("/voice/teach-back/result", json=result)
+    assert rejected.status_code == 422, rejected.text
+    assert rejected.json()["message"] == load_teach_back_config().invalid_student_evidence_message
+    assert upstream["events"] == before and upstream["engine_calls"] == 0
+    assert session_service._sessions[session_id].teach_back_content.state == content.state
+    result["reply"]["student_evidence"] = "the repeated part is plus 4, the part that stays the same always, and n is the part that changes."
+    accepted = client.post("/voice/teach-back/result", json=result)
+    assert accepted.status_code == 200, accepted.text
+    assert session_service._sessions[session_id].teach_back_content.state.completed_micro_skill_ids == ["T02.M1"]
+    assert upstream["engine_calls"] == 1
+    count = len(upstream["events"])
+    assert client.post("/voice/teach-back/result", json=result).status_code == 200
+    assert len(upstream["events"]) == count and upstream["engine_calls"] == 1
+
+
 def test_realtime_refresh_closes_confirmed_skills_and_changes_catalogue(upstream: dict[str, object]) -> None:
     session_id = upstream["session_id"]
     content = repeated_structure_content()
@@ -495,6 +521,7 @@ def test_realtime_refresh_closes_confirmed_skills_and_changes_catalogue(upstream
     first = client.post("/voice/teach-back/context", json=request)
     assert first.status_code == 200
     first_schema = first.json()["tool_parameters"]
+    assert first_schema["properties"]["student_evidence"]["description"] == load_teach_back_config().realtime.student_evidence_description
     assert first_schema["$defs"]["TeachBackEvaluation"]["properties"]["error_code"]["enum"] == [None, "ERR-FIXED"]
     assert "NEXT_MICRO_SKILL" in first_schema["properties"]["next_action"]["enum"]
     accepted = realtime_result(session_id, "TURN-FIRST", "The starting number changes; adding four stays fixed.", "UNDERSTOOD")
