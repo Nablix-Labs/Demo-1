@@ -64,7 +64,8 @@ def test_live_teach_back_navigation_is_not_evidence(message: str, monkeypatch: p
     content = TeachBackPayload.model_validate(teach_back_content())
     history = [ConversationMessage(role="user", content="A letter stands for a number we do not know yet."),
                ConversationMessage(role="assistant", content="You explained that a letter represents the changing quantity.")]
-    engine = build_openai_ai_engine_client(settings)
+    # Same model the app switches to for Teach-Back (generate_teach_back_reply).
+    engine = build_openai_ai_engine_client(settings.model_copy(update={"openai_ai_engine_model": load_teach_back_config().backend_model}))
     assert engine is not None
     reply = generate_teach_back_reply(content, message, "VOICE", 0.95, history)
     assert reply.evaluation.understanding_status is None, reply.model_dump()
