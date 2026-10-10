@@ -26,7 +26,7 @@ from app.models.session import SessionRecord
 from app.services import session_service
 from tests.test_session_events import _event_response
 from tests.test_teach_back_engine import teach_back_content
-from tests.test_teach_back_openai_smoke import CURIOUS_STUDENT_TURNS, assert_curiosity_without_grading, assert_question_answered, repeated_structure_content
+from tests.test_teach_back_openai_smoke import CURIOUS_STUDENT_TURNS, CURIOUS_STUDENT_CASE, TEACH_BACK_CONVERSATIONS, TeachBackConversationCase, assert_curiosity_without_grading, assert_question_answered, repeated_structure_content
 
 
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
@@ -728,8 +728,10 @@ def test_disabling_realtime_preserves_standard_teachback(upstream: dict[str, obj
 
 
 
-@pytest.mark.parametrize("rejected_turn", [None, 2])
-def test_live_realtime_curious_student_conversation(upstream: dict[str, object], monkeypatch: pytest.MonkeyPatch, rejected_turn: int | None) -> None:
+@pytest.mark.parametrize("case,rejected_turn", [pytest.param(CURIOUS_STUDENT_CASE, None, id="curiosity"),
+                                               pytest.param(CURIOUS_STUDENT_CASE, 2, id="invented_code"),
+                                               *[pytest.param(case, None, id=name) for name, case in TEACH_BACK_CONVERSATIONS.items()]])
+def test_live_realtime_curious_student_conversation(upstream: dict[str, object], monkeypatch: pytest.MonkeyPatch, case: TeachBackConversationCase, rejected_turn: int | None) -> None:
     if os.getenv("NABLIX_RUN_REALTIME_SMOKE") != "true":
         pytest.skip("Set NABLIX_RUN_REALTIME_SMOKE=true to run the billed Realtime conversation.")
     key = os.getenv("NABLIX_OPENAI_API_KEY")
@@ -747,7 +749,7 @@ def test_live_realtime_curious_student_conversation(upstream: dict[str, object],
     async def converse() -> None:
         recordings: list[bytes] = []
         async with AsyncOpenAI(api_key=key) as audio_client:
-            for message, _, _ in CURIOUS_STUDENT_TURNS:
+            for message, _, _ in case["turns"]:
                 audio = await audio_client.audio.speech.create(
                     model="gpt-4o-mini-tts", voice="alloy", input=message, response_format="pcm",
                 )
@@ -758,7 +760,7 @@ def test_live_realtime_curious_student_conversation(upstream: dict[str, object],
         model = load_teach_back_config().realtime.model
         async with connect(f"wss://api.openai.com/v1/realtime?model={model}",
                            extra_headers={"Authorization": f"Bearer {started.json()['client_secret']}"}, open_timeout=20) as connection:
-            for index, ((message, verdict, current), audio) in enumerate(zip(CURIOUS_STUDENT_TURNS, recordings, strict=True)):
+            for index, ((message, verdict, current), audio) in enumerate(zip(case["turns"], recordings, strict=True)):
                 assert context["micro_skill_id"] == current
                 supplied = json.loads(context["instructions"].split("<SESSION_CONTEXT>\n", 1)[1].split("\n</SESSION_CONTEXT>", 1)[0])
                 expected_action = "NEXT_MICRO_SKILL" if current == "T02.M1" else "MOVE_TO_PHASE_2"
@@ -819,11 +821,15 @@ def test_live_realtime_curious_student_conversation(upstream: dict[str, object],
                     assert_curiosity_without_grading(reply)
                     assert_question_answered(message, reply)
                     break
-                if index < len(CURIOUS_STUDENT_TURNS) - 1:
+                if index < len(case["turns"]) - 1:
                     refreshed = client.post("/voice/teach-back/context", json={"session_id": session_id, "student_id": "ST001"})
                     assert refreshed.status_code == 200, refreshed.text
                     context = refreshed.json()
     asyncio.run(converse())
-    assert session_service._sessions[session_id].current_phase == "GUIDED_PRACTICE"
-    assert [event["event_type"] for event in upstream["events"]][-2:] == ["TEACH_BACK_TURN_RECORDED", "TEACH_BACK_COMPLETED"]
-    assert upstream["engine_calls"] >= 4
+    assert session_service._sessions[session_id].current_phase == case["final_phase"]
+    if case["final_phase"] == "GUIDED_PRACTICE":
+        assert [event["event_type"] for event in upstream["events"]][-2:] == ["TEACH_BACK_TURN_RECORDED", "TEACH_BACK_COMPLETED"]
+    else:
+        assert session_service._sessions[session_id].teach_back_content.state.failed_explanation_count == 2
+        assert session_service._sessions[session_id].teach_back_content.state.completed_micro_skill_ids == []
+    assert upstream["engine_calls"] >= 2

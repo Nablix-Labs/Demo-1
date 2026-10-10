@@ -1,0 +1,20 @@
+reported_spoken_maths:
+  final_phase: GUIDED_PRACTICE
+  turns:
+    - ["Right, so in n plus 4, so the repeated part is plus 4, the part that stays the same always, and n is the part that changes. So n can be any value such as 2, so 2 plus 4. If it's n is 3, then it's 3 plus 4, etc.", UNDERSTOOD, T02.M1]
+    - ["As I already explained, adding four stays fixed.", null, T02.M2]
+    - ["N represents the starting number that changes, so I write n plus four.", UNDERSTOOD, T02.M2]
+acknowledgements_and_questions:
+  final_phase: GUIDED_PRACTICE
+  turns:
+    - ["Okay.", null, T02.M1]
+    - ["The starting number changes and plus four stays the same.", UNDERSTOOD, T02.M1]
+    - ["Next please.", null, T02.M2]
+    - ["Does the letter mean a number or an object?", null, T02.M2]
+    - ["The letter represents the starting number, which can change from two to three or another number.", UNDERSTOOD, T02.M2]
+two_genuine_misconceptions:
+  final_phase: CONCEPT_ORIENTATION
+  turns:
+    - ["The starting number always stays fixed, and the operation changes each time.", MISCONCEPTION, T02.M1]
+    - ["Why are we comparing the starting numbers?", null, T02.M1]
+    - ["I still think the starting number always stays fixed, and the operation changes each time.", MISCONCEPTION, T02.M1]

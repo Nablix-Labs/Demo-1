@@ -1,8 +1,13 @@
 import json
 import os
 import re
+from pathlib import Path
+from typing import Literal
 
 import pytest
+import yaml
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
 from app.ai_engine.classifier import build_openai_ai_engine_client
 from app.ai_engine.teach_back import build_teach_back_context, generate_teach_back_reply, validate_teach_back_reply
@@ -84,6 +89,17 @@ CURIOUS_STUDENT_TURNS: tuple[tuple[str, str | None, str], ...] = (
 )
 
 
+class TeachBackConversationCase(TypedDict):
+    final_phase: Literal["GUIDED_PRACTICE", "CONCEPT_ORIENTATION"]
+    turns: list[tuple[str, Literal["UNDERSTOOD", "MISCONCEPTION"] | None, str]]
+
+
+TEACH_BACK_CONVERSATIONS = TypeAdapter(dict[str, TeachBackConversationCase]).validate_python(
+    yaml.safe_load(Path(__file__).with_name("teach_back_conversations.yaml").read_text())
+)
+CURIOUS_STUDENT_CASE: TeachBackConversationCase = {"final_phase": "GUIDED_PRACTICE", "turns": list(CURIOUS_STUDENT_TURNS)}
+
+
 def repeated_structure_content() -> TeachBackPayload:
     raw = teach_back_content()
     raw["targets"][0].update(
@@ -127,7 +143,9 @@ def assert_question_answered(message: str, reply: TeachBackReply) -> None:
             assert "couldn't follow" not in answer and "couldn’t follow" not in answer, reply.model_dump()
 
 
-def test_standard_curiosity_through_complete_conversation(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("case", [pytest.param(CURIOUS_STUDENT_CASE, id="curiosity"),
+                                 *[pytest.param(case, id=name) for name, case in TEACH_BACK_CONVERSATIONS.items()]])
+def test_standard_curiosity_through_complete_conversation(monkeypatch: pytest.MonkeyPatch, case: TeachBackConversationCase) -> None:
     if os.getenv("NABLIX_RUN_OPENAI_SMOKE") != "true":
         pytest.skip("Set NABLIX_RUN_OPENAI_SMOKE=true to run the billed AI smoke evaluation.")
     settings = Settings(use_openai_ai_engine=True)
@@ -136,7 +154,7 @@ def test_standard_curiosity_through_complete_conversation(monkeypatch: pytest.Mo
     monkeypatch.setattr("app.ai_engine.teach_back.get_settings", lambda: settings)
     content = repeated_structure_content()
     history: list[ConversationMessage] = []
-    for message, verdict, current in CURIOUS_STUDENT_TURNS:
+    for message, verdict, current in case["turns"]:
         assert content.state.current_micro_skill_id == current
         reply = generate_teach_back_reply(content, message, "TEXT", None, history)
         assert reply.evaluation.understanding_status == verdict, reply.model_dump()
@@ -156,8 +174,12 @@ def test_standard_curiosity_through_complete_conversation(monkeypatch: pytest.Mo
                 "failed_explanation_count": 0, "status": "IN_PROGRESS" if remaining else "COMPLETED",
             })})
         elif verdict == "MISCONCEPTION":
-            assert reply.next_action == "ASK_REEXPLANATION"
+            assert reply.next_action == ("ASK_REEXPLANATION" if content.state.failed_explanation_count == 0 else "RETURN_TO_ORIENTATION")
             content = content.model_copy(update={"state": content.state.model_copy(update={
                 "failed_explanation_count": content.state.failed_explanation_count + 1,
             })})
-    assert content.state.completed_micro_skill_ids == content.state.target_micro_skill_ids
+    if case["final_phase"] == "GUIDED_PRACTICE":
+        assert content.state.completed_micro_skill_ids == content.state.target_micro_skill_ids
+    else:
+        assert content.state.failed_explanation_count == 2
+        assert content.state.completed_micro_skill_ids == []
